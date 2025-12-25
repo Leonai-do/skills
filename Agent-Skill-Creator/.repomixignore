@@ -1,0 +1,8 @@
+# Add patterns to ignore here, one per line
+# Example:
+# *.log
+# tmp/
+LICENSE.txt
+repomix.config.json
+Full-Skill-Creator-Agent.md
+.repomixignore

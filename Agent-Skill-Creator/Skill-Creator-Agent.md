@@ -1,7 +1,6 @@
 ---
 name: Agent Skill Creator
 description: The Meta-Agent for creating new skills. Use this when you need to create, update, or package a skill. This Agent acts as a "Skill Architect" to strictly enforce project standards.
-license: Complete terms in LICENSE.txt
 ---
 
 # Skill Creator Agent
