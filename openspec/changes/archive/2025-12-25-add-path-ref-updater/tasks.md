@@ -1,0 +1,11 @@
+## 1. Implementation
+- [x] 1.1 Initialize skill using `python skill_factory.py path-ref-updater "Updates broken path references within files."`
+- [x] 1.2 Implement `skills/path-ref-updater/path_ref_updater.py`:
+    - [x] Logic to identify file paths (imports, links) in common formats (md, py, js).
+    - [x] Logic to resolve paths and check existence.
+    - [x] Logic to compute corrected paths.
+    - [x] Logic to apply changes to file content (in-place or stdout).
+- [x] 1.3 Configure `skills/path-ref-updater/SKILL.md`:
+    - [x] Define inputs (target file, project root).
+    - [x] Add strict constraints (No file moves).
+- [x] 1.4 Verify skill using `python Agent-Skill-Creator/scripts/package_skill.py path-ref-updater`.
