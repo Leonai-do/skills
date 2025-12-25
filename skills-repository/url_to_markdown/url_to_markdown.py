@@ -90,9 +90,13 @@ def main(
         # 1. Determine base directory relative to this script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # 2. Create date-based folder: output/YYYY-MM-DD
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        output_dir = os.path.join(script_dir, "output", date_str)
+        # 2. Create domain-based folder: output/domain
+        parsed = urlparse(inputs.url)
+        domain = parsed.netloc
+        # Sanitize domain simple way (replace port colons, etc)
+        domain = re.sub(r'[^a-zA-Z0-9.-]', '_', domain)
+        
+        output_dir = os.path.join(script_dir, "output", domain)
         os.makedirs(output_dir, exist_ok=True)
         
         # 3. Generate filename
