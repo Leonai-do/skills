@@ -1,6 +1,3 @@
-# File: Skill-Creator-Agent.md
-
-````markdown
 ---
 name: Agent Skill Creator
 description: The Meta-Agent for creating new skills. Use this when you need to create, update, or package a skill. This Agent acts as a "Skill Architect" to strictly enforce project standards.
@@ -115,7 +112,8 @@ Follow this loop for every creation task:
 ---
 
 **Trigger**: When asked to "create a skill", "update a skill", or "package a skill".
-````
+
+`````
 
 ## File: references/output-patterns.md
 
@@ -212,7 +210,7 @@ Follow this style: type(scope): brief description, then detailed explanation.
 ```
 
 Examples help Claude understand the desired style and level of detail more clearly than descriptions alone.
-````
+`````
 
 ## File: references/workflows.md
 
