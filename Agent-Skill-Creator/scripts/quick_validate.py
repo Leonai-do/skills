@@ -83,6 +83,34 @@ def validate_skill(skill_path):
         if len(description) > 1024:
             return False, f"Description is too long ({len(description)} characters). Maximum is 1024 characters."
 
+    # Check description length (max 1024 characters per spec)
+        if len(description) > 1024:
+            return False, f"Description is too long ({len(description)} characters). Maximum is 1024 characters."
+
+    # --- AGENTIC VALIDATION RULES ---
+    
+    # 1. Check for Banned Files (No Auxiliaries)
+    BANNED_FILES = {'README.md', 'INSTALL.md', 'CHANGELOG.md', 'LICENSE', '.gitignore', 'requirements.txt'}
+    for file_path in skill_path.rglob('*'):
+        if file_path.name in BANNED_FILES:
+            return False, f"Found BANNED file: {file_path.name}. Skills must not contain auxiliary metadata files."
+
+    # 2. Check for Placeholder Text (Definition of Done)
+    for file_path in skill_path.rglob('*'):
+        if file_path.is_file() and not file_path.name.startswith('.'):
+            try:
+                # Skip assets/ as they might be binary or legitimate templates
+                if 'assets' in file_path.parts:
+                    continue
+                    
+                text = file_path.read_text(encoding='utf-8')
+                if 'TODO' in text:
+                    return False, f"Found 'TODO' in {file_path.relative_to(skill_path)}. Skill is not complete."
+                if '[INSERT]' in text:
+                    return False, f"Found '[INSERT]' in {file_path.relative_to(skill_path)}. Skill is not complete."
+            except UnicodeDecodeError:
+                continue # Skip binary files
+
     return True, "Skill is valid!"
 
 if __name__ == "__main__":
