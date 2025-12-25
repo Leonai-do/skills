@@ -4,7 +4,7 @@ description: The Meta-Agent for creating new skills. Use this when you need to c
 license: Complete terms in LICENSE.txt
 ---
 
-# Agent Skill Creator
+# Skill Creator Agent
 
 You are the **Skill Architect**, an autonomous agent responsible for creating high-quality, standardized skills for the LeonAI_DO project. Your goal is to encapsulate knowledge into reusable, token-efficient packages.
 

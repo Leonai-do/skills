@@ -1,34 +1,58 @@
-# Skill Creator Spec
+# Skill Creator Capability
 
 ## ADDED Requirements
 
-### Requirement: Skill Creation
+### Requirement: Architecture - Meta-Agent Role
 
-The system MUST provide an automated way to generate new skill scaffolds to ensure consistency.
+The Skill Creator Agent MUST operate as an "Architect" distinct from a user, using a specific generation loop to ensure quality and separation of concerns.
 
-#### Scenario: Creating a New Skill
+#### Scenario: Prompting
 
-- **Given** the user wants to add a new capability to the agent
-- **Then** the agent MUST use the Skill Creator standard
-- **And** the agent MUST scaffold the skill using `skill_factory.py`
-- **And** the skill MUST reside in `skills/{name}/`
-- **And** the skill MUST have a `SKILL.md` file
+- **Step:** The system instantiates the Skill Creator Agent.
+- **Step:** The system injects the "Architect" persona into the system prompt.
+- **Verify:** Agent distinguishes between its own instruction context and the generated content.
+- **Verify:** Agent executes the "Generate -> Critique -> Revise" loop.
 
-### Requirement: Skill Structure
+### Requirement: Core Structure - The Golden Rule
 
-All skills MUST adhere to a strict directory and file structure to be recognized by the agent.
+Standardization is critical. Agents MUST use the provided tooling to generate the directory structure rather than inventing it.
 
-#### Scenario: Skill Structure
+#### Scenario: Initialization
 
-- **Given** a new skill is created
-- **Then** it MUST follow the defined folder structure (`SKILL.md`, `scripts/`, `assets/`, `references/`)
-- **And** python scripts MUST use PEP 723 metadata for dependencies
+- **Step:** Agent starts a new skill task.
+- **Step:** Agent runs `python scripts/init_skill.py <skill-name>` immediately.
+- **Verify:** Directory structure matches the canonical template.
+- **Verify:** Directory name uses hyphen-case.
 
-### Requirement: Documentation
+### Requirement: Content - Strict File Sandbox
 
-The Skill Creator system MUST be fully documented to guide future skill development.
+Skills MUST be lean and devoid of auxiliary metadata files that clutter the context window.
 
-#### Scenario: Documentation
+#### Scenario: File Creation
 
-- **Given** the Skill Creator system
-- **Then** it MUST provide comprehensive documentation in `docs/skills/`
+- **Step:** Agent creates or modifies files in the skill directory.
+- **Verify:** NO `README.md`, `INSTALL.md`, `CHANGELOG.md`, `LICENSE`, or `.gitignore` files exist.
+- **Verify:** All executable logic is in `scripts/`.
+- **Verify:** All documentation is in `references/` or `SKILL.md`.
+
+### Requirement: Content - Conciseness
+
+Skill documentation MUST remain small to preserve the context window for the user's task.
+
+#### Scenario: Refactoring Large Files
+
+- **Step:** Agent identifies `SKILL.md` > 500 lines.
+- **Step:** Agent extracts content to `references/`.
+- **Verify:** `SKILL.md` is under 500 lines.
+- **Step:** Agent identifies reference > 1000 lines.
+- **Verify:** File is summarized or structured for grep search.
+
+### Requirement: Validation - Definition of Done
+
+The agent MUST self-validate its output to ensure functionality and completeness.
+
+#### Scenario: Completion Check
+
+- **Step:** Agent attempts to mark task as complete.
+- **Verify:** NO `TODO`, `[INSERT]`, or placeholder strings exist in any file.
+- **Verify:** `python scripts/package_skill.py <skill-name>` exits with success code 0.
