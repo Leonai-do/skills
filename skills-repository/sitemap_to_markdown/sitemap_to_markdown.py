@@ -547,145 +547,120 @@ async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path, inp
             rel_path = rel_path.with_suffix('.md') # Ensure .md
             rel_path = resolve_collision(output_dir, rel_path)
             save_path = output_dir / rel_path
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            header = f"---\nurl: {url}\ntype: pdf\ndate: {datetime.now().isoformat()}\n---\n\n"
-            async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
-                await f.write(header + text)
-            log(f"Saved PDF: {url} -> {rel_path}")
-            return "success"
-        else:
-            return "skipped"
-
-    if 'text/html' not in content_type:
-        return "skipped"
-        
-    try:
-        html = response.text
-        
-        # 2.1 Main Content Extraction (Readability)
-        if inputs.extract_main and Document:
-            try:
-                doc = Document(html)
-                html = doc.summary() # This returns HTML of the main content
-            except Exception as e:
-                log(f"Readability failed for {url}: {e}")
-                
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # 2.4 Custom Selectors (Strip)
-        if inputs.strip_selector:
-            for selector in inputs.strip_selector.split(','):
-                if selector.strip():
-                    for elem in soup.select(selector.strip()):
-                        elem.decompose()
-        
-        # 2.4 Custom Selectors (Content)
-        if inputs.content_selector:
-            main = soup.select_one(inputs.content_selector)
-            if main:
-                soup = BeautifulSoup(str(main), 'html.parser') # Create new soup from selection
-        elif not inputs.extract_main:
-             # Default generic cleaning if not using readability or custom selector
-            for tag in soup(['script', 'style', 'nav', 'footer', 'iframe', 'noscript']):
-                tag.decompose()
-        
-        # 2.2 / 2.5 Asset/Image Downloading & Rewriting
-        # We need to process tags
-        tasks = []
-        
-        # Images
-        if inputs.download_images:
-            for img in soup.find_all('img'):
-                src = img.get('src')
-                if src:
-                    abs_url = urljoin(url, src)
-                    # We can't await easily inside loop if we want parallelism?
-                    # For now linear or create list of tasks.
-                    # Let's do it sequentially for simplicity or simple gather?
-                    # Modifying soup in place after download.
-                    asset_path = await download_asset(client, abs_url, output_dir, "images")
-                    if asset_path:
-                         # We need to make this path relative to the markdown file?
-                         # The markdown file is at `rel_path`. 
-                         # `asset_path` is relative to `output_dir`.
-                         # We'll calculate this later or just use absolute/root relative.
-                         # Markdown standard often expects relative to file.
-                         img['src'] = asset_path
-                         
-        # Assets (CSS/JS)
-        if inputs.download_assets:
-            # CSS
-            for link in soup.find_all('link', rel='stylesheet'):
-                href = link.get('href')
-                if href:
-                    abs_url = urljoin(url, href)
-                    asset_path = await download_asset(client, abs_url, output_dir, "css")
-                    if asset_path:
-                        link['href'] = asset_path
-            # JS
-            for script in soup.find_all('script', src=True):
-                src = script.get('src')
-                if src:
-                    abs_url = urljoin(url, src)
-                    asset_path = await download_asset(client, abs_url, output_dir, "js")
-                    if asset_path:
-                        script['src'] = asset_path
-
-        # Absolutify remaining URLs (if not downloaded)
-        for tag in soup.find_all(['a', 'img']):
-            if tag.has_attr('href'):
-                # Don't overwrite if we just rewrote it to local
-                if not tag['href'].startswith('_assets/'):
-                     tag['href'] = urljoin(url, tag['href'])
-            if tag.has_attr('src'):
-                if not tag['src'].startswith('_assets/'):
-                    tag['src'] = urljoin(url, tag['src'])
-                
-        # Convert
-        converter = html2text.HTML2Text()
-        converter.ignore_links = False
-        converter.ignore_images = False
-        converter.body_width = 0
-        converter.ul_item_mark = '-'
-        markdown = converter.handle(str(soup))
-        markdown = re.sub(r'\n{3,}', '\n\n', markdown)
-        
-        rel_path = sanitize_filename(url)
-        rel_path = resolve_collision(output_dir, rel_path)
-        
-        # Fixup asset paths to be relative to the markdown file
-        # Current asset paths are `_assets/...`. Markdown file is `foo/bar.md`.
-        # We need `../../_assets/...`
-        # Simple string replace? Or robust path calculation?
-        # Let's simple string replace `_assets/` with `rel_to_root/_assets/`
-        depth = len(rel_path.parts) - 1
-        if depth > 0:
-            prefix = "../" * depth
-            markdown = markdown.replace("_assets/", f"{prefix}_assets/")
-            # Also need to fix up HTML attributes if we kept them? 
-            # html2text keeps some attributes.
-            
-        save_path = output_dir / rel_path
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
-        header = f"---\nurl: {url}\ndate: {datetime.now().isoformat()}\n---\n\n"
+        # Phase 5.1: Conditional output based on format
+        output_format = inputs.output_format.lower()
         
-        async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
-            await f.write(header + markdown)
+        if output_format == 'json':
+            # Save as JSON
+            save_path = save_path.with_suffix('.json')
+            json_data = convert_to_json(url, response.text, soup, meta={'date': datetime.now().isoformat()})
+            async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
+                await f.write(json.dumps(json_data, indent=2))
+                
+        elif output_format == 'html':
+            # Save as wrapped HTML
+            save_path = save_path.with_suffix('.html')
+            html_output = convert_to_html_wrapped(url, soup, markdown)
+            async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
+                await f.write(html_output)
+                
+        elif output_format == 'text':
+            # Save as plain text
+            save_path = save_path.with_suffix('.txt')
+            text_output = convert_to_text(soup)
+            async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
+                await f.write(text_output)
+                
+        else:  # markdown (default)
+            # Original markdown save
+            save_path = save_path.with_suffix('.md')
+            header = f"---\nurl: {url}\ndate: {datetime.now().isoformat()}\n---\n\n"
+            async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
+                await f.write(header + markdown)
             
         if inputs.s3_bucket:
              upload_to_s3(inputs.s3_bucket, inputs.s3_prefix, save_path, rel_path)
              
         if inputs.sqlite_db:
+             # Store markdown content for SQLite regardless of output format
              export_to_sqlite(Path(inputs.sqlite_db), url, markdown, datetime.now().isoformat(), "success")
 
-        log(f"Saved: {url} -> {rel_path}")
+        log(f"Saved ({output_format}): {url} -> {rel_path}")
+
         return "success"
         
     except Exception as e:
         log(f"Conversion error for {url}: {e}")
         return "failed"
+
+
+# --- Phase 5.1: Format Converters ---
+
+def convert_to_json(url: str, html_content: str, soup, metadata: dict = None) -> dict:
+    """Convert page to JSON format with raw HTML and metadata"""
+    return {
+        "url": url,
+        "html": html_content,
+        "title": soup.find('title').text if soup.find('title') else "",
+        "text": soup.get_text(separator=' ', strip=True),
+        "metadata": metadata or {},
+        "fetched_at": datetime.now().isoformat()
+    }
+
+def convert_to_html_wrapped(url: str, soup, markdown: str = None) -> str:
+    """Wrap content in HTML template with TOC"""
+    # Generate simple TOC from headings
+    toc_items = []
+    for heading in soup.find_all(['h1', 'h2', 'h3']):
+        level = int(heading.name[1])
+        text = heading.get_text(strip=True)
+        anchor = text.lower().replace(' ', '-').replace('/', '-')
+        heading['id'] = anchor
+        toc_items.append((level, text, anchor))
+    
+    toc_html = ""
+    if toc_items:
+        toc_html = "<nav class='toc'><h2>Table of Contents</h2><ul>"
+        for level, text, anchor in toc_items:
+            indent = "  " * (level - 1)
+            toc_html += f"{indent}<li><a href='#{anchor}'>{text}</a></li>"
+        toc_html += "</ul></nav>"
+    
+    template = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{soup.find('title').text if soup.find('title') else url}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+                max-width: 900px; margin: 2rem auto; padding: 0 2rem; line-height: 1.6; }}
+        .toc {{ background: #f5f5f5; padding: 1rem; border-radius: 4px; margin-bottom: 2rem; }}
+        .toc ul {{ list-style: none; padding-left: 1rem; }}
+        .metadata {{ color: #666; font-size: 0.9rem; border-bottom: 1px solid #eee; padding-bottom: 1rem; margin-bottom: 2rem; }}
+    </style>
+</head>
+<body>
+    <div class="metadata">
+        <strong>Source:</strong> <a href="{url}">{url}</a><br>
+        <strong>Fetched:</strong> {datetime.now().isoformat()}
+    </div>
+    {toc_html}
+    <article>
+        {str(soup)}
+    </article>
+</body>
+</html>"""
+    return template
+
+def convert_to_text(soup) -> str:
+    """Convert to plain text, stripping all formatting"""
+    # Get text with reasonable spacing
+    text = soup.get_text(separator='\n', strip=True)
+    # Clean up excessive newlines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
 
 def save_checkpoint(checkpoint_path: str, checkpoint: Checkpoint):
     """Save checkpoint synchronously (safe since called infrequently or at exit)"""
@@ -843,12 +818,17 @@ def generate_html_report(output_dir: Path, manifest: Dict[str, Any]):
     <title>Sitemap Crawl Report</title>
     <style>
         body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-        .stats { display: flex; gap: 2rem; margin-bottom: 2rem; }
-        .stat { border: 1px solid #ddd; padding: 1rem; border-radius: 4px; flex: 1; text-align: center; }
+        .stats { display: flex; gap: 2rem; margin-bottom: 2rem; flex-wrap: wrap; }
+        .stat { border: 1px solid #ddd; padding: 1rem; border-radius: 4px; flex: 1; text-align: center; min-width: 150px; }
         .stat h3 { margin: 0 0 0.5rem; color: #666; font-size: 0.9rem; }
         .stat .value { font-size: 1.5rem; font-weight: bold; }
         h1 { border-bottom: 2px solid #eee; padding-bottom: 1rem; }
         .error { color: #d32f2f; }
+        .added { color: #2e7d32; }
+        .removed { color: #c62828; }
+        .changed { color: #f57c00; }
+        .diff-section { margin: 2rem 0; padding: 1rem; background: #f5f5f5; border-radius: 4px; }
+        ul { max-height: 400px; overflow-y: auto; }
     </style>
 </head>
 <body>
@@ -869,6 +849,66 @@ def generate_html_report(output_dir: Path, manifest: Dict[str, Any]):
     </div>
     <p>Crawled on: {{ manifest.crawl_date }}</p>
     
+    {% if manifest.diff %}
+    <div class="diff-section">
+        <h2>Changes Since Last Crawl</h2>
+        <div class="stats">
+            <div class="stat">
+                <h3 class="added">Added</h3>
+                <div class="value added">{{ manifest.diff.stats.added_count }}</div>
+            </div>
+            <div class="stat">
+                <h3 class="removed">Removed</h3>
+                <div class="value removed">{{ manifest.diff.stats.removed_count }}</div>
+            </div>
+            <div class="stat">
+                <h3 class="changed">Changed</h3>
+                <div class="value changed">{{ manifest.diff.stats.changed_count }}</div>
+            </div>
+            <div class="stat">
+                <h3>Unchanged</h3>
+                <div class="value">{{ manifest.diff.stats.unchanged_count }}</div>
+            </div>
+        </div>
+        
+        {% if manifest.diff.added %}
+        <h3 class="added">Added URLs ({{ manifest.diff.added|length }})</h3>
+        <ul>
+            {% for url in manifest.diff.added[:20] %}
+            <li>{{ url }}</li>
+            {% endfor %}
+            {% if manifest.diff.added|length > 20 %}
+            <li>... and {{ manifest.diff.added|length - 20 }} more</li>
+            {% endif %}
+        </ul>
+        {% endif %}
+        
+        {% if manifest.diff.removed %}
+        <h3 class="removed">Removed URLs ({{ manifest.diff.removed|length }})</h3>
+        <ul>
+            {% for url in manifest.diff.removed[:20] %}
+            <li>{{ url }}</li>
+            {% endfor %}
+            {% if manifest.diff.removed|length > 20 %}
+            <li>... and {{ manifest.diff.removed|length - 20 }} more</li>
+            {% endif %}
+        </ul>
+        {% endif %}
+        
+        {% if manifest.diff.changed %}
+        <h3 class="changed">Changed URLs ({{ manifest.diff.changed|length }})</h3>
+        <ul>
+            {% for url in manifest.diff.changed[:20] %}
+            <li>{{ url }}</li>
+            {% endfor %}
+            {% if manifest.diff.changed|length > 20 %}
+            <li>... and {{ manifest.diff.changed|length - 20 }} more</li>
+            {% endif %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endif %}
+    
     {% if manifest.failed_urls %}
     <h2>Failed URLs ({{ manifest.failed_urls|length }})</h2>
     <ul>
@@ -880,7 +920,8 @@ def generate_html_report(output_dir: Path, manifest: Dict[str, Any]):
 </body>
 </html>
 """
-    try:
+    
+try:
         t = Template(template_str)
         html = t.render(manifest=manifest)
         with open(output_dir / "_report.html", "w") as f:
@@ -895,6 +936,34 @@ async def send_webhook(url: str, payload: Dict[str, Any]):
             await client.post(url, json=payload, timeout=10)
         except Exception as e:
             log(f"Webhook failed: {e}")
+
+
+def calculate_diff(old_manifest: Dict[str, Any], new_manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate differences between two manifests"""
+    old_hashes = old_manifest.get('url_content_hashes', {})
+    new_hashes = new_manifest.get('url_content_hashes', {})
+    
+    old_urls = set(old_hashes.keys())
+    new_urls = set(new_hashes.keys())
+    
+    added = list(new_urls - old_urls)
+    removed = list(old_urls - new_urls)
+    
+    # Check for changed content in common URLs
+    common_urls = old_urls & new_urls
+    changed = [url for url in common_urls if old_hashes.get(url) != new_hashes.get(url)]
+    
+    return {
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "stats": {
+            "added_count": len(added),
+            "removed_count": len(removed),
+            "changed_count": len(changed),
+            "unchanged_count": len(common_urls) - len(changed)
+        }
+    }
 
 async def async_main(inputs: InputModel):
 
@@ -1145,6 +1214,30 @@ async def async_main(inputs: InputModel):
                     failed_set.add(url)
                     
         # Finalize
+        # Collect content hashes for diff detection
+        url_to_hash = {}
+        for root, dirs, files in os.walk(output_dir):
+            for file in files:
+                if file.endswith(".md") and not file.startswith("_"):
+                    path = Path(root) / file
+                    try:
+                        content = path.read_text(encoding="utf-8")
+                        # Extract URL from frontmatter
+                        if content.startswith("---"):
+                            parts = content.split("---", 2)
+                            if len(parts) >= 3:
+                                frontmatter = parts[1]
+                                for line in frontmatter.splitlines():
+                                    if line.startswith("url:"):
+                                        url = line.split("url:", 1)[1].strip()
+                                        # Hash the markdown content (exclude frontmatter)
+                                        md_content = parts[2] if len(parts) > 2 else content
+                                        content_hash = hashlib.md5(md_content.encode()).hexdigest()
+                                        url_to_hash[url] = content_hash
+                                        break
+                    except Exception:
+                        pass
+        
         manifest = {
             "version": "1.0",
             "crawl_date": get_now_str(),
@@ -1155,15 +1248,29 @@ async def async_main(inputs: InputModel):
                 "skipped": len(skipped_set)
             },
             "failed_urls": list(failed_set),
-            "skipped_urls": list(skipped_set)
+            "skipped_urls": list(skipped_set),
+            "url_content_hashes": url_to_hash
         }
         
         manifest_path = output_dir / "_manifest.json"
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)
 
+        # Phase 4.3: Diff Report
+        diff_data = None
+        if inputs.diff_with:
+            try:
+                with open(inputs.diff_with, 'r', encoding='utf-8') as f:
+                    old_manifest = json.load(f)
+                diff_data = calculate_diff(old_manifest, manifest)
+                log(f"Diff calculated: {diff_data['stats']}")
+            except Exception as e:
+                log(f"Failed to load diff manifest: {e}")
+
         # Phase 4.2: HTML Report
         if inputs.html_report:
+            # Pass diff_data to report generator
+            manifest['diff'] = diff_data if diff_data else None
             generate_html_report(output_dir, manifest)
             
         # Phase 4.4: Webhook

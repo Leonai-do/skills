@@ -340,7 +340,7 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 - [x] 4.3.5 **Generate diff report section in HTML**
 
-- [x] 4.3.6 **Test**: Run two crawls, verify diff detected
+- [ ] 4.3.6 **Test**: Run two crawls, verify diff detected
 
 ### 4.4 Webhook Notifications
 
@@ -456,11 +456,11 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 6.1 Page Summarization
 
-- [x] 6.1.1 **Add dependency**: `openai` or `anthropic` (optional)
+- [ ] 6.1.1 **Add dependency**: `openai` or `anthropic` (optional)
 
 - [x] 6.1.2 **Add CLI flags**: `--summarize`, `--ai-api-key <key>`, `--ai-model <name>`
 
-- [x] 6.1.3 **Create function**: `def generate_summary(content: str, api_key: str, model: str) -> str`
+- [ ] 6.1.3 **Create function**: `def generate_summary(content: str, api_key: str, model: str) -> str`
   - **Implementation**:
     ```python
     from openai import OpenAI
@@ -472,37 +472,37 @@ This document contains **7 phases** of enhancements. Each phase is independent a
     return response.choices[0].message.content
     ```
 
-- [x] 6.1.4 **Add summary to frontmatter**
+- [ ] 6.1.4 **Add summary to frontmatter**
   - **Format**: `summary: "AI-generated summary..."`
 
-- [x] 6.1.5 **Test**: Mock API, verify summary added
+- [ ] 6.1.5 **Test**: Mock API, verify summary added
 
 ### 6.2 Named Entity Extraction
 
 ### 6.2 Named Entity Extraction
 
-- [x] 6.2.1 **Add dependency**: `spacy` (optional)
+- [ ] 6.2.1 **Add dependency**: `spacy` (optional)
 
 - [x] 6.2.2 **Add CLI flag**: `--extract-entities`
 
-- [x] 6.2.3 **Load spaCy model**: `nlp = spacy.load("en_core_web_sm")`
+- [ ] 6.2.3 **Load spaCy model**: `nlp = spacy.load("en_core_web_sm")`
 
-- [x] 6.2.4 **Extract entities**
+- [ ] 6.2.4 **Extract entities**
   - **Implementation**: `doc = nlp(text); entities = [(ent.text, ent.label_) for ent in doc.ents]`
 
-- [x] 6.2.5 **Add to frontmatter**: `entities: ["Person: John Doe", "Org: ACME Corp"]`
+- [ ] 6.2.5 **Add to frontmatter**: `entities: ["Person: John Doe", "Org: ACME Corp"]`
 
 ### 6.3 Semantic Chunking
 
 - [x] 6.3.1 **Add CLI flag**: `--semantic-chunk`
 
-- [x] 6.3.2 **Create function**: `def chunk_by_semantics(text: str, max_tokens: int = 512) -> List[str]`
+- [ ] 6.3.2 **Create function**: `def chunk_by_semantics(text: str, max_tokens: int = 512) -> List[str]`
   - **Implementation**: Split by headings, paragraphs, maintain context
 
-- [x] 6.3.3 **Save chunks as separate files**
+- [ ] 6.3.3 **Save chunks as separate files**
   - **Format**: `page-chunk-001.md`, `page-chunk-002.md`
 
-- [x] 6.3.4 **Test**: Verify chunks under token limit
+- [ ] 6.3.4 **Test**: Verify chunks under token limit
 
 ### 6.4 Auto-Generated TOC
 
