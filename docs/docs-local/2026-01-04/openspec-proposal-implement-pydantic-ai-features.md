@@ -1,0 +1,121 @@
+# OpenSpec Proposal Report: Implement AI Features using Pydantic AI
+
+**Date**: 2026-01-04  
+**Time**: 00:07 (Local)  
+**Session**: OpenSpec Proposal Creation  
+**Change ID**: `implement-pydantic-ai-features`
+
+---
+
+## Initial Project State
+
+The `sitemap_to_markdown` skill had Phase 6 (AI/LLM Integration) tasks defined in the `extend-sitemap-advanced-features` proposal but not fully implemented:
+
+- **Stubbed CLI flags**: `--summarize`, `--ai-api-key`, `--ai-model`, `--extract-entities`, `--semantic-chunk`
+- **Incomplete tasks**: 10 tasks remained unchecked (6.1.3-6.1.5, 6.2.3-6.2.5, 6.3.2-6.3.4)
+- **Original design**: Direct OpenAI/Anthropic SDK usage
+- **Available reference**: Pydantic AI documentation downloaded to `pydantic_ai_complete/`
+
+---
+
+## User Request
+
+The user requested creation of an OpenSpec proposal to implement AI features using **Pydantic AI** instead of direct SDK calls, based on the optimized prompt in:
+
+```
+docs/docs-local/2026-01-04/prompts/optimized-add-ai-features-pydantic-ai-20260104-001500.md
+```
+
+**Key constraints from the optimized prompt**:
+
+1. Use `pydantic-ai` library (v0.0.14+)
+2. Implement Summarization Agent, Entity Agent, and Semantic Chunking
+3. Map `inputs.ai_model` to Pydantic AI model strings
+4. Use `tiktoken` for token awareness
+5. Support multiple providers (OpenAI, Anthropic, Gemini)
+
+---
+
+## Changes Made
+
+### Files Created
+
+| File                                                                                   | Purpose                                                                        |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `openspec/changes/implement-pydantic-ai-features/proposal.md`                          | Main proposal with Why, What Changes, Test Strategy, and Impact sections       |
+| `openspec/changes/implement-pydantic-ai-features/design.md`                            | Technical design with architecture decisions, model mapping, and code patterns |
+| `openspec/changes/implement-pydantic-ai-features/tasks.md`                             | 28 tasks across 4 phases with implementation details                           |
+| `openspec/changes/implement-pydantic-ai-features/specs/sitemap-ai-integration/spec.md` | Spec delta with 5 new requirements and 17 scenarios                            |
+
+### Proposal Summary
+
+**Phases**:
+
+1. **Infrastructure & Summarization** (8 tasks): Add dependency, create `SummaryOutput` model, implement agent
+2. **Entity Extraction** (6 tasks): Create `EntityOutput` model, integrate with manifest
+3. **Semantic Chunking** (6 tasks): Implement heading-based chunking, save chunk files
+4. **Testing & Documentation** (8 tasks): Unit tests, integration tests, SKILL.md update
+
+**Requirements Added**:
+
+1. AI-Powered Page Summarization
+2. AI-Powered Entity Extraction
+3. Semantic Content Chunking
+4. Model-Agnostic AI Provider Support
+5. AI Feature Testing Infrastructure
+
+---
+
+## Validation
+
+```bash
+$ openspec validate implement-pydantic-ai-features --strict
+Change 'implement-pydantic-ai-features' is valid
+```
+
+**Current OpenSpec state**:
+
+```
+Changes:
+  extend-sitemap-advanced-features     150/160 tasks
+  formalize-new-skill-creator          No tasks
+  implement-pydantic-ai-features       0/28 tasks
+  standardize-git-sync                 0/6 tasks
+```
+
+---
+
+## Reference Material
+
+### Optimized Prompt (Copy)
+
+```markdown
+### Request:
+
+Implement Phase 6 (AI Integration) of the `sitemap_to_markdown.py` skill using the `pydantic-ai` library. This involves:
+
+1. **Summarization Agent**: An agent that takes markdown content and returns a concise summary.
+2. **Entity Agent**: An agent that extracts named entities (People, Organizations, Locations, Dates) into a structured Pydantic model.
+3. **Semantic Chunking**: A logic block (or agent) that splits large documents into chunks based on semantic boundaries rather than simple character counts.
+4. **Integration**: Wire these features into the `process_url` flow, updating the file frontmatter and the `_manifest.json` correctly.
+```
+
+### Key Design Decisions
+
+1. **Lazy agent instantiation**: Agents created on first use to avoid startup overhead
+2. **Model mapping**: User-friendly names (`gpt-4o`) mapped to Pydantic AI format (`openai:gpt-4o`)
+3. **Token truncation**: Content truncated to 4000 tokens before AI calls
+4. **Graceful degradation**: Skip AI features if API key missing or model fails
+
+---
+
+## Next Steps
+
+1. **Review proposal**: Ensure all requirements align with user expectations
+2. **Approval gate**: Wait for user approval before implementation
+3. **Implementation**: Follow `/openspec-global-apply` workflow when ready
+4. **Update existing tasks**: Mark Phase 6 tasks in `extend-sitemap-advanced-features` as complete
+
+---
+
+_Report generated by Antigravity on 2026-01-04 00:07_
