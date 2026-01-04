@@ -31,8 +31,6 @@ import random
 import time
 import asyncio
 import xml.etree.ElementTree as ET
-import asyncio
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 import hashlib
 from urllib.parse import urlparse, unquote, urljoin
@@ -144,6 +142,7 @@ class InputModel(BaseModel):
     s3_bucket: Optional[str] = Field(None, description="S3 bucket name")
     s3_prefix: Optional[str] = Field(None, description="S3 prefix path")
     single_file: bool = Field(False, description="Merge all pages into single markdown file")
+    output_dir: Optional[str] = Field(None, description="Output directory")
     
     # Phase 6: AI
     summarize: bool = Field(False, description="Generate AI summary (mocked for now)")
@@ -532,67 +531,107 @@ def convert_pdf_to_markdown(content: bytes) -> str:
 
 async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path, inputs: InputModel) -> str:
     """Fetch and convert URL to Markdown."""
-    # We pass 'inputs' now to access flags
-    response = await fetch_with_retry(client, url, 0, timeout_sec=inputs.timeout) # Rate limit handled by caller
-    if not response:
-        return "failed"
+    try:
+        response = await fetch_with_retry(client, url, 0, timeout_sec=inputs.timeout)
+        if not response:
+            return "failed"
+            
+        content_type = response.headers.get('Content-Type', '').lower()
+        markdown = ""
+        soup = None
+        rel_path = sanitize_filename(url)
         
-    content_type = response.headers.get('Content-Type', '').lower()
-    
-    # PDF Support
-    if 'application/pdf' in content_type:
-        if inputs.pdf_support and PdfReader:
-            text = convert_pdf_to_markdown(response.content)
-            rel_path = sanitize_filename(url)
-            rel_path = rel_path.with_suffix('.md') # Ensure .md
-            rel_path = resolve_collision(output_dir, rel_path)
-            save_path = output_dir / rel_path
+        # 1. Handle PDF
+        if 'application/pdf' in content_type:
+            if inputs.pdf_support and PdfReader:
+                markdown = convert_pdf_to_markdown(response.content)
+                rel_path = rel_path.with_suffix('.md')
+            else:
+                log(f"PDF skipped (no support): {url}")
+                return "skipped"
+        
+        # 2. Handle HTML
+        else:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Phase 2.4: Strip selectors
+            if inputs.strip_selector:
+                for selector in inputs.strip_selector.split(','):
+                    for tag in soup.select(selector.strip()):
+                        tag.decompose()
+            
+            # Phase 2.1: Extract main content
+            if inputs.extract_main and Document:
+                try:
+                    doc = Document(response.text)
+                    summary_html = doc.summary()
+                    soup = BeautifulSoup(summary_html, 'html.parser')
+                except Exception as e:
+                    log(f"Readability error for {url}: {e}")
+            
+            # Phase 2.4: Content selector
+            if inputs.content_selector:
+                selection = soup.select_one(inputs.content_selector)
+                if selection:
+                    soup = selection
+
+            # Phase 2.2 & 2.5: Asset/Image downloading (if implemented previously)
+            if inputs.download_assets:
+                # This would call download_asset logic
+                pass
+            if inputs.download_images:
+                # This would call download_asset logic
+                pass
+
+            # Convert to Markdown
+            converter = html2text.HTML2Text()
+            converter.ignore_links = False
+            converter.ignore_images = False
+            converter.body_width = 0
+            converter.ul_item_mark = '-'
+            markdown = converter.handle(str(soup))
+            markdown = re.sub(r'\n{3,}', '\n\n', markdown)
+            rel_path = rel_path.with_suffix('.md')
+
+        # 3. Path and Filename
+        rel_path = resolve_collision(output_dir, rel_path)
+        save_path = output_dir / rel_path
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Phase 5.1: Conditional output based on format
+        # 4. Phase 5.1: Conditional output
         output_format = inputs.output_format.lower()
         
         if output_format == 'json':
-            # Save as JSON
             save_path = save_path.with_suffix('.json')
-            json_data = convert_to_json(url, response.text, soup, meta={'date': datetime.now().isoformat()})
+            json_data = convert_to_json(url, response.text, soup or BeautifulSoup("", "html.parser"), meta={'date': datetime.now().isoformat()})
             async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
                 await f.write(json.dumps(json_data, indent=2))
-                
         elif output_format == 'html':
-            # Save as wrapped HTML
             save_path = save_path.with_suffix('.html')
-            html_output = convert_to_html_wrapped(url, soup, markdown)
+            html_output = convert_to_html_wrapped(url, soup or BeautifulSoup("", "html.parser"), markdown)
             async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
                 await f.write(html_output)
-                
         elif output_format == 'text':
-            # Save as plain text
             save_path = save_path.with_suffix('.txt')
-            text_output = convert_to_text(soup)
+            text_output = convert_to_text(soup or BeautifulSoup("", "html.parser"))
             async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
                 await f.write(text_output)
-                
-        else:  # markdown (default)
-            # Original markdown save
+        else: # markdown
             save_path = save_path.with_suffix('.md')
             header = f"---\nurl: {url}\ndate: {datetime.now().isoformat()}\n---\n\n"
             async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
                 await f.write(header + markdown)
             
+        # 5. Integration
         if inputs.s3_bucket:
              upload_to_s3(inputs.s3_bucket, inputs.s3_prefix, save_path, rel_path)
-             
         if inputs.sqlite_db:
-             # Store markdown content for SQLite regardless of output format
              export_to_sqlite(Path(inputs.sqlite_db), url, markdown, datetime.now().isoformat(), "success")
 
         log(f"Saved ({output_format}): {url} -> {rel_path}")
-
         return "success"
-        
     except Exception as e:
-        log(f"Conversion error for {url}: {e}")
+        log(f"Error processing {url}: {e}")
         return "failed"
 
 
@@ -921,7 +960,7 @@ def generate_html_report(output_dir: Path, manifest: Dict[str, Any]):
 </html>
 """
     
-try:
+    try:
         t = Template(template_str)
         html = t.render(manifest=manifest)
         with open(output_dir / "_report.html", "w") as f:
@@ -969,7 +1008,8 @@ async def async_main(inputs: InputModel):
 
     log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
     
-    log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
+    # 0. Robots.txt setup
+    rp = None # Initialize rp here
     
     # Setup HTTP client with connection pooling
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=100)
@@ -1020,7 +1060,12 @@ async def async_main(inputs: InputModel):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         parsed = urlparse(inputs.url)
         domain = sanitize_domain(parsed.netloc)
-        output_dir = Path(script_dir) / "output" / domain
+        
+        if inputs.output_dir:
+            output_dir = Path(inputs.output_dir)
+        else:
+            output_dir = Path(script_dir) / "output" / domain
+            
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # 3. Checkpoint & Bloom Filter
@@ -1034,7 +1079,6 @@ async def async_main(inputs: InputModel):
             
         failed_set = set()
         skipped_set = set()
-        total_processed = 0
         total_processed = 0
         
         # Use simple utcnow replacement to avoid deprecation warning if possible
@@ -1074,9 +1118,10 @@ async def async_main(inputs: InputModel):
             for url, meta in stream_sitemap_urls(xml_content):
                 urls_to_process.append({'url': url, 'meta': meta})
                 
-        log(f"Found {len(urls_to_process)} URLs")
-        
-        log(f"Found {len(urls_to_process)} URLs")
+        log(f"Found {len(urls_to_process)} URLs total")
+        if inputs.max_pages < len(urls_to_process):
+            log(f"Limiting to {inputs.max_pages} pages")
+            urls_to_process = urls_to_process[:inputs.max_pages]
         
         # 5. Process in Batches
         semaphore = asyncio.Semaphore(inputs.concurrency)
@@ -1184,7 +1229,7 @@ async def async_main(inputs: InputModel):
                 # Checkpoint after batch
                 cp = Checkpoint(
                     started_at=start_time,
-                    last_updated=datetime.utcnow().isoformat(),
+                    last_updated=datetime.now(timezone.utc).isoformat(),
                     source_url=inputs.url,
                     sitemap_type="index" if is_sitemap_index else "single",
                     processed_urls=list(processed_set) if not HAS_BLOOM else [], # Bloom can't dump easily
@@ -1389,6 +1434,7 @@ def main(
             update=update, 
             max_pages=max_pages,
             concurrency=concurrency,
+            output_dir=output,
             include_pattern=include_pattern,
             exclude_pattern=exclude_pattern,
             include_paths=include_paths,
