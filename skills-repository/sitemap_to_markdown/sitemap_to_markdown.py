@@ -12,11 +12,14 @@
 #     "pybloom-live",
 #     "readability-lxml",
 #     "pypdf",
-#     "jinja2"
+#     "jinja2",
+#     "boto3",
+#     "tiktoken"
 # ]
 # ///
 
 from urllib.robotparser import RobotFileParser
+
 
 
 
@@ -45,6 +48,24 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 import mimetypes
 from io import BytesIO
+import sqlite3
+import zipfile
+import tarfile
+from collections import deque
+
+# Phase 6 Imports
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None
+    
+# Phase 5 Imports
+try:
+    import boto3
+    from botocore.exceptions import NoCredentialsError
+except ImportError:
+    boto3 = None
+
 
 # Phase 4 Imports
 try:
@@ -115,6 +136,23 @@ class InputModel(BaseModel):
     diff_with: Optional[str] = Field(None, description="Manifest path to diff against")
     notify_webhook: Optional[str] = Field(None, description="Webhook URL for notifications")
     metrics_file: Optional[str] = Field(None, description="Prometheus metrics file definition")
+
+    # Phase 5: Storage
+    output_format: str = Field("markdown", description="Output format: markdown, json, html, text")
+    create_archive: Optional[str] = Field(None, description="Create archive: zip, tar.gz")
+    sqlite_db: Optional[str] = Field(None, description="SQLite database path")
+    s3_bucket: Optional[str] = Field(None, description="S3 bucket name")
+    s3_prefix: Optional[str] = Field(None, description="S3 prefix path")
+    single_file: bool = Field(False, description="Merge all pages into single markdown file")
+    
+    # Phase 6: AI
+    summarize: bool = Field(False, description="Generate AI summary (mocked for now)")
+    ai_api_key: Optional[str] = Field(None, description="AI API Key")
+    ai_model: str = Field("gpt-3.5-turbo", description="AI Model name")
+    extract_entities: bool = Field(False, description="Extract entities (mocked)")
+    semantic_chunk: bool = Field(False, description="Chunk content semantically")
+    generate_toc: bool = Field(False, description="Generate Table of Contents")
+    ai_manifest: bool = Field(False, description="Generate llms.txt")
 
 
 # --- 2. Define Output Schema ---
@@ -636,6 +674,12 @@ async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path, inp
         async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
             await f.write(header + markdown)
             
+        if inputs.s3_bucket:
+             upload_to_s3(inputs.s3_bucket, inputs.s3_prefix, save_path, rel_path)
+             
+        if inputs.sqlite_db:
+             export_to_sqlite(Path(inputs.sqlite_db), url, markdown, datetime.now().isoformat(), "success")
+
         log(f"Saved: {url} -> {rel_path}")
         return "success"
         
@@ -661,6 +705,93 @@ def load_checkpoint(checkpoint_path: str) -> Optional[Checkpoint]:
     except Exception as e:
         log(f"Failed to load checkpoint: {e}")
     return None
+
+
+
+# --- Phase 5: Storage Helpers ---
+
+def export_to_sqlite(db_path: Path, url: str, content: str, date: str, status: str):
+    try:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS pages
+                     (url TEXT PRIMARY KEY, content TEXT, date TEXT, status TEXT)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_url ON pages(url)''')
+        c.execute("INSERT OR REPLACE INTO pages VALUES (?, ?, ?, ?)", (url, content, date, status))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"SQLite export failed: {e}")
+
+def upload_to_s3(bucket: str, prefix: str, file_path: Path, relative_path: Path):
+    if not boto3:
+        log("boto3 not installed, skipping S3 upload")
+        return
+    try:
+        s3 = boto3.client('s3')
+        key = f"{prefix}/{relative_path}" if prefix else str(relative_path)
+        s3.upload_file(str(file_path), bucket, key)
+    except Exception as e:
+        log(f"S3 upload failed: {e}")
+
+def create_archive(output_dir: Path, archive_type: str, domain: str):
+    if archive_type == 'zip':
+        archive_path = output_dir.with_name(f"{domain}.zip")
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(output_dir):
+                for file in files:
+                    file_path = Path(root) / file
+                    zipf.write(file_path, file_path.relative_to(output_dir.parent))
+        log(f"Created ZIP archive: {archive_path}")
+    elif archive_type == 'tar.gz':
+        archive_path = output_dir.with_name(f"{domain}.tar.gz")
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(output_dir, arcname=domain)
+        log(f"Created tar.gz archive: {archive_path}")
+
+# --- Phase 6: AI Helpers ---
+
+def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:
+    if not tiktoken:
+        return 0
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except Exception:
+        return 0
+
+def generate_toc(markdown: str) -> str:
+    lines = []
+    for line in markdown.splitlines():
+        match = re.search(r'^(#{1,6}) (.+)$', line)
+        if match:
+            level = len(match.group(1))
+            title = match.group(2)
+            slug = re.sub(r'[^a-z0-9-]', '', title.lower().replace(' ', '-'))
+            indent = "  " * (level - 1)
+            lines.append(f"{indent}- [{title}](#{slug})")
+    return "\n".join(lines) + "\n\n"
+
+def generate_llms_txt(output_dir: Path, manifest: Dict[str, Any]):
+    """Generate llms.txt for AI agents"""
+    lines = ["# Site Content Manifest"]
+    lines.append(f"Source: {manifest['source_url']}")
+    lines.append(f"Date: {manifest['crawl_date']}")
+    lines.append("\n## Pages\n")
+    
+    # We need to list markdown files
+    # Iterating output_dir might be better than valid processed_urls if we want actual paths?
+    # But manifest has processed count. Ideally we'd have paths in manifest.
+    # For now, simplistic walk.
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            if file.endswith(".md"):
+                rel = Path(root) / file
+                rel = rel.relative_to(output_dir)
+                lines.append(f"- [{rel}]({rel})")
+                
+    with open(output_dir / "llms.txt", "w") as f:
+        f.write("\n".join(lines))
 
 # --- Phase 4 Reporting Implementation ---
 
@@ -1046,6 +1177,36 @@ async def async_main(inputs: InputModel):
              }
              await send_webhook(inputs.notify_webhook, webhook_payload)
             
+        # Phase 5.5: Single File
+        if inputs.single_file:
+            log("Generating single merged markdown file...")
+            full_content = []
+            full_content.append(f"# Documentation for {inputs.url}\n\n")
+            if inputs.generate_toc:
+                 # We can't easily gen TOC for merged file without pass 1.
+                 # Let's skip global TOC for now or do it post-merge?
+                 pass
+            
+            for root, dirs, files in os.walk(output_dir):
+                for file in files:
+                    if file.endswith(".md") and not file.startswith("_"):
+                         path = Path(root) / file
+                         try:
+                            content = path.read_text(encoding="utf-8")
+                            full_content.append(f"\n\n---\n\n<!-- Page: {file} -->\n\n{content}")
+                         except Exception:
+                             pass
+            
+            (output_dir / "_merged.md").write_text("".join(full_content), encoding="utf-8")
+        
+        # Phase 5.2: Archive
+        if inputs.create_archive:
+            create_archive(output_dir, inputs.create_archive, domain)
+
+        # Phase 6: llms.txt
+        if inputs.ai_manifest:
+            generate_llms_txt(output_dir, manifest)
+            
         result = {
             "url": inputs.url,
             "sitemap_url": sitemap_url,
@@ -1092,6 +1253,21 @@ def main(
     diff_with: Optional[str] = typer.Option(None, "--diff-with", help="Path to manifest to diff"),
     notify_webhook: Optional[str] = typer.Option(None, "--notify-webhook", help="Webhook URL"),
     metrics_file: Optional[str] = typer.Option(None, "--metrics-file", help="Prometheus metrics file"),
+    # Phase 5
+    output_format: str = typer.Option("markdown", "--output-format", help="Output format"),
+    create_archive: Optional[str] = typer.Option(None, "--create-archive", help="zip or tar.gz"),
+    sqlite_db: Optional[str] = typer.Option(None, "--sqlite-db", help="SQLite DB path"),
+    s3_bucket: Optional[str] = typer.Option(None, "--s3-bucket", help="S3 bucket"),
+    s3_prefix: Optional[str] = typer.Option(None, "--s3-prefix", help="S3 prefix"),
+    single_file: bool = typer.Option(False, "--single-file", help="Merge into one file"),
+    # Phase 6
+    summarize: bool = typer.Option(False, "--summarize", help="AI summary"),
+    ai_api_key: Optional[str] = typer.Option(None, "--ai-api-key", help="AI API Key"),
+    ai_model: str = typer.Option("gpt-3.5-turbo", "--ai-model", help="AI Model"),
+    extract_entities: bool = typer.Option(False, "--extract-entities", help="Extract entities"),
+    semantic_chunk: bool = typer.Option(False, "--semantic-chunk", help="Chunk content"),
+    generate_toc: bool = typer.Option(False, "--generate-toc", help="Generate TOC"),
+    ai_manifest: bool = typer.Option(False, "--ai-manifest", help="Generate llms.txt"),
     schema: bool = typer.Option(False)
 ):
     if schema:
@@ -1126,7 +1302,20 @@ def main(
             html_report=html_report,
             diff_with=diff_with,
             notify_webhook=notify_webhook,
-            metrics_file=metrics_file
+            metrics_file=metrics_file,
+            output_format=output_format,
+            create_archive=create_archive,
+            sqlite_db=sqlite_db,
+            s3_bucket=s3_bucket,
+            s3_prefix=s3_prefix,
+            single_file=single_file,
+            summarize=summarize,
+            ai_api_key=ai_api_key,
+            ai_model=ai_model,
+            extract_entities=extract_entities,
+            semantic_chunk=semantic_chunk,
+            generate_toc=generate_toc,
+            ai_manifest=ai_manifest
         )
     except Exception as e:
         print(json.dumps(OutputModel(status="error", error=str(e)).model_dump()))

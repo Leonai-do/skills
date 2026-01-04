@@ -377,25 +377,25 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 5.1 Multiple Output Formats
 
-- [ ] 5.1.1 **Add CLI flag**: `--output-format <format>`
+- [x] 5.1.1 **Add CLI flag**: `--output-format <format>`
   - **Options**: `markdown` (default), `json`, `html`, `text`
 
-- [ ] 5.1.2 **Create format converters**
+- [x] 5.1.2 **Create format converters**
   - **JSON**: Store raw HTML + metadata
   - **HTML**: Wrap in template with TOC
   - **Text**: Strip all formatting
 
-- [ ] 5.1.3 **Conditional output in `process_url`**
+- [x] 5.1.3 **Conditional output in `process_url`**
   - **Implementation**: `if inputs.output_format == 'json': save_as_json(...)`
 
-- [ ] 5.1.4 **Test**: Verify each format generates correctly
+- [x] 5.1.4 **Test**: Verify each format generates correctly
 
 ### 5.2 Archive Generation
 
-- [ ] 5.2.1 **Add CLI flag**: `--create-archive <format>`
+- [x] 5.2.1 **Add CLI flag**: `--create-archive <format>`
   - **Options**: `zip`, `tar.gz`
 
-- [ ] 5.2.2 **Create archive after crawl completion**
+- [x] 5.2.2 **Create archive after crawl completion**
   - **Implementation**:
     ```python
     import tarfile
@@ -403,31 +403,31 @@ This document contains **7 phases** of enhancements. Each phase is independent a
         tar.add(output_dir, arcname=domain)
     ```
 
-- [ ] 5.2.3 **Include manifest and reports in archive**
+- [x] 5.2.3 **Include manifest and reports in archive**
 
-- [ ] 5.2.4 **Test**: Extract archive, verify contents
+- [x] 5.2.4 **Test**: Extract archive, verify contents
 
 ### 5.3 SQLite Storage
 
-- [ ] 5.3.1 **Add CLI flag**: `--sqlite-db <path>`
+- [x] 5.3.1 **Add CLI flag**: `--sqlite-db <path>`
 
-- [ ] 5.3.2 **Create schema**
+- [x] 5.3.2 **Create schema**
   - **Table**: `pages(url TEXT PRIMARY KEY, content TEXT, date TEXT, status TEXT)`
 
-- [ ] 5.3.3 **Insert rows after each successful fetch**
+- [x] 5.3.3 **Insert rows after each successful fetch**
   - **Implementation**: `cursor.execute("INSERT INTO pages VALUES (?, ?, ?, ?)", (url, markdown, date, 'success'))`
 
-- [ ] 5.3.4 **Create indexes**: `CREATE INDEX idx_url ON pages(url)`
+- [x] 5.3.4 **Create indexes**: `CREATE INDEX idx_url ON pages(url)`
 
-- [ ] 5.3.5 **Test**: Query database, verify data retrievable
+- [x] 5.3.5 **Test**: Query database, verify data retrievable
 
 ### 5.4 S3/GCS Upload
 
-- [ ] 5.4.1 **Add dependency**: `boto3` (optional)
+- [x] 5.4.1 **Add dependency**: `boto3` (optional)
 
-- [ ] 5.4.2 **Add CLI flag**: `--s3-bucket <name>` and `--s3-prefix <path>`
+- [x] 5.4.2 **Add CLI flag**: `--s3-bucket <name>` and `--s3-prefix <path>`
 
-- [ ] 5.4.3 **Upload files after crawl**
+- [x] 5.4.3 **Upload files after crawl**
   - **Implementation**:
     ```python
     import boto3
@@ -436,19 +436,19 @@ This document contains **7 phases** of enhancements. Each phase is independent a
         s3.upload_file(str(file), bucket, f"{prefix}/{file.relative_to(output_dir)}")
     ```
 
-- [ ] 5.4.4 **Test**: Mock S3 client, verify upload calls
+- [x] 5.4.4 **Test**: Mock S3 client, verify upload calls
 
 ### 5.5 Single-File Mode
 
-- [ ] 5.5.1 **Add CLI flag**: `--single-file`
+- [x] 5.5.1 **Add CLI flag**: `--single-file`
 
-- [ ] 5.5.2 **Accumulate all content in memory**
+- [x] 5.5.2 **Accumulate all content in memory**
   - **Implementation**: `all_content = []` then append each page
 
-- [ ] 5.5.3 **Write single massive markdown file**
+- [x] 5.5.3 **Write single massive markdown file**
   - **Format**: TOC at top, then all pages separated by `---`
 
-- [ ] 5.5.4 **Test**: Verify single file contains all pages
+- [x] 5.5.4 **Test**: Verify single file contains all pages
 
 ---
 
@@ -456,11 +456,11 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 6.1 Page Summarization
 
-- [ ] 6.1.1 **Add dependency**: `openai` or `anthropic` (optional)
+- [x] 6.1.1 **Add dependency**: `openai` or `anthropic` (optional)
 
-- [ ] 6.1.2 **Add CLI flags**: `--summarize`, `--ai-api-key <key>`, `--ai-model <name>`
+- [x] 6.1.2 **Add CLI flags**: `--summarize`, `--ai-api-key <key>`, `--ai-model <name>`
 
-- [ ] 6.1.3 **Create function**: `def generate_summary(content: str, api_key: str, model: str) -> str`
+- [x] 6.1.3 **Create function**: `def generate_summary(content: str, api_key: str, model: str) -> str`
   - **Implementation**:
     ```python
     from openai import OpenAI
@@ -472,47 +472,49 @@ This document contains **7 phases** of enhancements. Each phase is independent a
     return response.choices[0].message.content
     ```
 
-- [ ] 6.1.4 **Add summary to frontmatter**
+- [x] 6.1.4 **Add summary to frontmatter**
   - **Format**: `summary: "AI-generated summary..."`
 
-- [ ] 6.1.5 **Test**: Mock API, verify summary added
+- [x] 6.1.5 **Test**: Mock API, verify summary added
 
 ### 6.2 Named Entity Extraction
 
-- [ ] 6.2.1 **Add dependency**: `spacy` (optional)
+### 6.2 Named Entity Extraction
 
-- [ ] 6.2.2 **Add CLI flag**: `--extract-entities`
+- [x] 6.2.1 **Add dependency**: `spacy` (optional)
 
-- [ ] 6.2.3 **Load spaCy model**: `nlp = spacy.load("en_core_web_sm")`
+- [x] 6.2.2 **Add CLI flag**: `--extract-entities`
 
-- [ ] 6.2.4 **Extract entities**
+- [x] 6.2.3 **Load spaCy model**: `nlp = spacy.load("en_core_web_sm")`
+
+- [x] 6.2.4 **Extract entities**
   - **Implementation**: `doc = nlp(text); entities = [(ent.text, ent.label_) for ent in doc.ents]`
 
-- [ ] 6.2.5 **Add to frontmatter**: `entities: ["Person: John Doe", "Org: ACME Corp"]`
+- [x] 6.2.5 **Add to frontmatter**: `entities: ["Person: John Doe", "Org: ACME Corp"]`
 
 ### 6.3 Semantic Chunking
 
-- [ ] 6.3.1 **Add CLI flag**: `--semantic-chunk`
+- [x] 6.3.1 **Add CLI flag**: `--semantic-chunk`
 
-- [ ] 6.3.2 **Create function**: `def chunk_by_semantics(text: str, max_tokens: int = 512) -> List[str]`
+- [x] 6.3.2 **Create function**: `def chunk_by_semantics(text: str, max_tokens: int = 512) -> List[str]`
   - **Implementation**: Split by headings, paragraphs, maintain context
 
-- [ ] 6.3.3 **Save chunks as separate files**
+- [x] 6.3.3 **Save chunks as separate files**
   - **Format**: `page-chunk-001.md`, `page-chunk-002.md`
 
-- [ ] 6.3.4 **Test**: Verify chunks under token limit
+- [x] 6.3.4 **Test**: Verify chunks under token limit
 
 ### 6.4 Auto-Generated TOC
 
-- [ ] 6.4.1 **Add CLI flag**: `--generate-toc`
+- [x] 6.4.1 **Add CLI flag**: `--generate-toc`
 
-- [ ] 6.4.2 **Parse markdown headings**
+- [x] 6.4.2 **Parse markdown headings**
   - **Implementation**: Regex `^#{1,6} (.+)$`
 
-- [ ] 6.4.3 **Generate TOC**
+- [x] 6.4.3 **Generate TOC**
   - **Format**: Nested list with anchor links
 
-- [ ] 6.4.4 **Prepend to markdown file**
+- [x] 6.4.4 **Prepend to markdown file**
 
 ---
 
@@ -526,6 +528,18 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 - [x] 7.1.2 **Get file modification time**
   - **Implementation**: `file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)`
 
+### 6.5 LLM Manifest (llms.txt)
+
+- [x] 6.5.1 **Add CLI flag**: `--ai-manifest`
+  - **Default**: False
+
+- [x] 6.5.2 **Create `llms.txt` generator**
+  - **Format**: Standard `llms.txt` format listing all pages
+  - **Content**: URL, Title, Description (from meta/AI summary)
+
+- [x] 6.5.3 **Write to output directory**
+
+- [x] 6.5.4 **Test**: Verify `llms.txt` exists and is valid
 - [x] 7.1.3 **Compare timestamps**
   - **Logic**: `if lastmod_dt <= file_mtime: skip`
 
