@@ -10,9 +10,23 @@ usage: |
     --summarize               Enable summarization
     --extract-entities        Enable entity extraction
     --semantic-chunk          Enable semantic chunking
-    --ai-api-key STR          API Key for LLM provider
     --ai-model STR            Model name (default: gpt-4o)
     --concurrency INT         Number of concurrent files to process (default: 5)
+    
+    # Provider Authentication & Configuration
+    --ai-api-key STR          Generic API Key (fallback/override)
+    
+    --openai-api-key STR      OpenAI API Key
+    --openai-base-url STR     OpenAI Base URL
+    --anthropic-api-key STR   Anthropic API Key
+    --anthropic-base-url STR  Anthropic Base URL
+    --google-api-key STR      Google/Gemini API Key
+    --deepseek-api-key STR    DeepSeek API Key
+    --deepseek-base-url STR   DeepSeek Base URL
+    --ollama-api-key STR      Ollama Cloud API Key
+    --ollama-base-url STR     Ollama Base URL (e.g. https://api.ollama.com)
+    --zai-api-key STR         Z.ai API Key
+    --hf-api-key STR          HuggingFace API Key
 ---
 
 # AI Content Enricher

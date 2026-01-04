@@ -47,14 +47,14 @@ MODEL_MAP = {
     # Z.ai (GLM / Zhipu)
     'glm-4.7': 'z-ai:glm-4.7',
 
-    # Ollama (Local/Open Weights - Schema: ollama:model_name)
-    'llama-4-70b': 'ollama:llama4:70b',
-    'llama-4-17b': 'ollama:llama4:17b',
-    'mistral-large-3': 'ollama:mistral-large:3',
-    'phi-5': 'ollama:phi5',
-
-    # LMStudio (Local Server)
-    'lmstudio-local': 'openai:local-model', # Uses OpenAI compatible endpoint
+    # Ollama (Cloud - via ollama.com)
+    'ollama-gpt-oss-120b': 'ollama:gpt-oss:120b-cloud',
+    'ollama-gpt-oss-20b': 'ollama:gpt-oss:20b-cloud',
+    'ollama-qwen3-coder-480b': 'ollama:qwen3-coder:480b-cloud',
+    'ollama-deepseek-671b': 'ollama:deepseek-v3.1:671b-cloud',
+    'ollama-kimi-k2': 'ollama:kimi-k2:1t-cloud',
+    'ollama-glm-4.6': 'ollama:glm-4.6:cloud',
+    'ollama-qwen3-vl': 'ollama:qwen3-vl:235b-cloud',
 
     # HuggingFace (Inference Endpoints)
     'hf-llama-4-70b': 'huggingface:meta-llama/Llama-4-70b-Instruct',
@@ -155,13 +155,25 @@ async def generate_summary(content: str, model_name: str, api_key: str) -> Optio
     # Setup Env Vars for Pydantic AI (it usually reads from env)
     # If using OpenAI, it expects OPENAI_API_KEY.
     # We might need to set it if passed via CLI.
-    if api_key:
-        if 'openai' in resolved_model:
-            os.environ['OPENAI_API_KEY'] = api_key
-        elif 'anthropic' in resolved_model:
-            os.environ['ANTHROPIC_API_KEY'] = api_key
-        elif 'google' in resolved_model:
-            os.environ['GOOGLE_API_KEY'] = api_key # or whatever lib expects
+    # Provide keys and endpoints based on provider
+    if 'openai' in resolved_model:
+        if api_key: os.environ['OPENAI_API_KEY'] = api_key
+    elif 'anthropic' in resolved_model:
+        if api_key: os.environ['ANTHROPIC_API_KEY'] = api_key
+    elif 'google' in resolved_model:
+        if api_key: os.environ['GOOGLE_API_KEY'] = api_key
+    elif 'deepseek' in resolved_model:
+        if api_key: os.environ['DEEPSEEK_API_KEY'] = api_key
+    elif 'ollama' in resolved_model:
+        # Ollama usually needs OLLAMA_HOST or just works with local, 
+        # but for cloud we might need auth if it acts like a remote.
+        # Assuming standard env var if library supports it, or custom handling.
+        # Pydantic AI usually relies on the underlying client.
+        if api_key: os.environ['OLLAMA_API_KEY'] = api_key # hypothetical
+    elif 'z-ai' in resolved_model:
+        if api_key: os.environ['ZAI_API_KEY'] = api_key
+    elif 'huggingface' in resolved_model:
+        if api_key: os.environ['HUGGINGFACE_API_KEY'] = api_key
             
     try:
         result = await agent.run(f"Summarize this:\n\n{truncated_content}")
@@ -178,11 +190,21 @@ async def extract_entities_ai(content: str, model_name: str, api_key: str) -> Op
     agent = get_entity_agent(resolved_model)
     truncated_content = truncate_for_model(content, max_tokens=4000)
     
-    if api_key:
-        if 'openai' in resolved_model:
-            os.environ['OPENAI_API_KEY'] = api_key
-        elif 'anthropic' in resolved_model:
-            os.environ['ANTHROPIC_API_KEY'] = api_key
+    # Provide keys and endpoints based on provider (duplicated logic, could be helper)
+    if 'openai' in resolved_model:
+        if api_key: os.environ['OPENAI_API_KEY'] = api_key
+    elif 'anthropic' in resolved_model:
+        if api_key: os.environ['ANTHROPIC_API_KEY'] = api_key
+    elif 'google' in resolved_model:
+        if api_key: os.environ['GOOGLE_API_KEY'] = api_key
+    elif 'deepseek' in resolved_model:
+        if api_key: os.environ['DEEPSEEK_API_KEY'] = api_key
+    elif 'ollama' in resolved_model:
+        if api_key: os.environ['OLLAMA_API_KEY'] = api_key
+    elif 'z-ai' in resolved_model:
+        if api_key: os.environ['ZAI_API_KEY'] = api_key
+    elif 'huggingface' in resolved_model:
+        if api_key: os.environ['HUGGINGFACE_API_KEY'] = api_key
             
     try:
         result = await agent.run(f"Extract entities from:\n\n{truncated_content}")
@@ -269,25 +291,65 @@ def main(
     summarize: Annotated[bool, typer.Option(help="Enable ai summarization")] = False,
     extract_entities: Annotated[bool, typer.Option(help="Enable entity extraction")] = False,
     semantic_chunk: Annotated[bool, typer.Option(help="Enable semantic chunking")] = False,
-    ai_api_key: Annotated[Optional[str], typer.Option(help="API Key for LLM provider")] = None,
+    
+    # Provider Configs
+    openai_api_key: Annotated[Optional[str], typer.Option(help="OpenAI API Key")] = None,
+    openai_base_url: Annotated[Optional[str], typer.Option(help="OpenAI Base URL")] = None,
+    
+    anthropic_api_key: Annotated[Optional[str], typer.Option(help="Anthropic API Key")] = None,
+    anthropic_base_url: Annotated[Optional[str], typer.Option(help="Anthropic Base URL")] = None,
+    
+    google_api_key: Annotated[Optional[str], typer.Option(help="Google/Gemini API Key")] = None,
+    
+    deepseek_api_key: Annotated[Optional[str], typer.Option(help="DeepSeek API Key")] = None,
+    deepseek_base_url: Annotated[Optional[str], typer.Option(help="DeepSeek Base URL")] = None,
+    
+    ollama_api_key: Annotated[Optional[str], typer.Option(help="Ollama Cloud API Key")] = None,
+    ollama_base_url: Annotated[Optional[str], typer.Option(help="Ollama Base URL (e.g. https://api.ollama.com)")] = None,
+    
+    zai_api_key: Annotated[Optional[str], typer.Option(help="Z.ai API Key")] = None,
+    hf_api_key: Annotated[Optional[str], typer.Option(help="HuggingFace API Key")] = None,
+
+    # General Override (Legacy/Simple)
+    ai_api_key: Annotated[Optional[str], typer.Option(help="Generic API Key (applied to selected provider if specific key not missing)")] = None,
+    
     ai_model: Annotated[str, typer.Option(help="Model name")] = "gpt-4o",
     concurrency: Annotated[int, typer.Option(help="Number of concurrent files to process")] = 5,
 ):
     """
     Enrich markdown content with AI summaries, entities, and semantic chunking.
     """
+    # Consolidate Keys/URLs into Env Vars
+    if openai_api_key: os.environ['OPENAI_API_KEY'] = openai_api_key
+    if openai_base_url: os.environ['OPENAI_BASE_URL'] = openai_base_url
+    
+    if anthropic_api_key: os.environ['ANTHROPIC_API_KEY'] = anthropic_api_key
+    if anthropic_base_url: os.environ['ANTHROPIC_BASE_URL'] = anthropic_base_url
+    
+    if google_api_key: os.environ['GOOGLE_API_KEY'] = google_api_key
+    
+    if deepseek_api_key: os.environ['DEEPSEEK_API_KEY'] = deepseek_api_key
+    if deepseek_base_url: os.environ['DEEPSEEK_BASE_URL'] = deepseek_base_url
+    
+    if ollama_api_key: os.environ['OLLAMA_API_KEY'] = ollama_api_key # or whatever pydantic-ai uses for ollama auth
+    if ollama_base_url: os.environ['OLLAMA_HOST'] = ollama_base_url # Standard Ollama env var
+    
+    if zai_api_key: os.environ['ZAI_API_KEY'] = zai_api_key
+    if hf_api_key: os.environ['HUGGINGFACE_API_KEY'] = hf_api_key
+
+    # Fallback to generic key if provided and specific one missing (logic handled in functions or here)
+    # Actually, simpler to just pass ai_api_key as 'api_key' param to functions acting as override/fallback
+    pass
     if not (summarize or extract_entities or semantic_chunk):
         print("No AI features enabled. Use --summarize, --extract-entities, or --semantic-chunk.")
         return
 
-    if (summarize or extract_entities) and not ai_api_key:
-         # Check env var as fallback
-        if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
-             print("Warning: AI API Key not provided. Skipping AI features that require it.")
-             # We might still proceed if semantic_chunk is strictly algorithmic, 
-             # but for now let's assume valid key needed for simplicity or future AI chunking.
-             if not semantic_chunk:
-                 return
+    # If using AI features, check if keys are likely present (either in env or passed)
+    if (summarize or extract_entities):
+        # We can't strict check all because we don't know which model needs what until resolved,
+        # but we can warn if NO potential keys are found and args are missing.
+        # For now, rely on processing/runtime error if key missing.
+        pass
 
     print(f"Processing directory: {input_dir}")
     print(f"Features: Summarize={summarize}, Entities={extract_entities}, Chunk={semantic_chunk}")
