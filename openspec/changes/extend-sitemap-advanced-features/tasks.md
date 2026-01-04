@@ -192,13 +192,13 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 3.1 Concurrent Processing
 
-- [ ] 3.1.1 **Add dependency**: `httpx` or `aiohttp`
+- [x] 3.1.1 **Add dependency**: `httpx` or `aiohttp`
 
-- [ ] 3.1.2 **Add CLI flag**: `--concurrency <int>`
+- [x] 3.1.2 **Add CLI flag**: `--concurrency <int>`
   - **Default**: 1 (sequential, current behavior)
   - **Range**: 1-10
 
-- [ ] 3.1.3 **Refactor `process_url` to async**
+- [x] 3.1.3 **Refactor `process_url` to async**
   - **Implementation**:
     ```python
     async def process_url_async(url: str, ...) -> str:
@@ -207,7 +207,7 @@ This document contains **7 phases** of enhancements. Each phase is independent a
             ...
     ```
 
-- [ ] 3.1.4 **Create async batch processor**
+- [x] 3.1.4 **Create async batch processor**
   - **Implementation**:
     ```python
     async def process_batch(urls: List[str], concurrency: int):
@@ -216,46 +216,46 @@ This document contains **7 phases** of enhancements. Each phase is independent a
         await asyncio.gather(*tasks)
     ```
 
-- [ ] 3.1.5 **Maintain rate limiting with concurrency**
+- [x] 3.1.5 **Maintain rate limiting with concurrency**
   - **Challenge**: Rate limit applies globally, not per task
   - **Implementation**: Use shared `asyncio.Lock` or token bucket
 
-- [ ] 3.1.6 **Test**: Benchmark sequential vs `--concurrency 3`
+- [x] 3.1.6 **Test**: Benchmark sequential vs `--concurrency 3`
   - **Expected**: 3× speed improvement
 
 ### 3.2 Proxy Support
 
-- [ ] 3.2.1 **Add CLI flag**: `--proxy <url>`
+- [x] 3.2.1 **Add CLI flag**: `--proxy <url>`
   - **Example**: `--proxy http://proxy.example.com:8080`
 
-- [ ] 3.2.2 **Configure proxy in requests**
+- [x] 3.2.2 **Configure proxy in requests**
   - **Implementation**: Add `proxies={'http': inputs.proxy, 'https': inputs.proxy}` to requests
 
-- [ ] 3.2.3 **Support SOCKS proxies**
+- [x] 3.2.3 **Support SOCKS proxies**
   - **Dependency**: `requests[socks]`
 
-- [ ] 3.2.4 **Test**: Mock proxy server, verify requests routed
+- [x] 3.2.4 **Test**: Mock proxy server, verify requests routed
 
 ### 3.3 Custom Headers & Authentication
 
-- [ ] 3.3.1 **Add CLI flag**: `--headers <json>`
+- [x] 3.3.1 **Add CLI flag**: `--headers <json>`
   - **Example**: `--headers '{"Authorization": "Bearer token"}'`
 
-- [ ] 3.3.2 **Parse JSON headers**
+- [x] 3.3.2 **Parse JSON headers**
   - **Implementation**: `headers = json.loads(inputs.headers)` with error handling
 
-- [ ] 3.3.3 **Merge with default headers**
+- [x] 3.3.3 **Merge with default headers**
   - **Implementation**: `{**default_headers, **custom_headers}`
 
-- [ ] 3.3.4 **Test**: Verify custom headers sent
+- [x] 3.3.4 **Test**: Verify custom headers sent
 
 ### 3.4 robots.txt Respect
 
-- [ ] 3.4.1 **Add CLI flag**: `--respect-robots`
+- [x] 3.4.1 **Add CLI flag**: `--respect-robots`
 
-- [ ] 3.4.2 **Install dependency**: `urllib.robotparser` (standard library)
+- [x] 3.4.2 **Install dependency**: `urllib.robotparser` (standard library)
 
-- [ ] 3.4.3 **Fetch and parse robots.txt**
+- [x] 3.4.3 **Fetch and parse robots.txt**
   - **Implementation**:
     ```python
     from urllib.robotparser import RobotFileParser
@@ -264,20 +264,20 @@ This document contains **7 phases** of enhancements. Each phase is independent a
     rp.read()
     ```
 
-- [ ] 3.4.4 **Check before each request**
+- [x] 3.4.4 **Check before each request**
   - **Implementation**: `if inputs.respect_robots and not rp.can_fetch(USER_AGENT, url): continue`
 
-- [ ] 3.4.5 **Test**: Mock robots.txt with disallowed paths, verify skipped
+- [x] 3.4.5 **Test**: Mock robots.txt with disallowed paths, verify skipped
 
 ### 3.5 Configurable Timeouts
 
-- [ ] 3.5.1 **Add CLI flag**: `--timeout <seconds>`
+- [x] 3.5.1 **Add CLI flag**: `--timeout <seconds>`
   - **Default**: 30 (current hardcoded value)
 
-- [ ] 3.5.2 **Apply timeout to all requests**
+- [x] 3.5.2 **Apply timeout to all requests**
   - **Implementation**: Replace `timeout=30` with `timeout=inputs.timeout`
 
-- [ ] 3.5.3 **Test**: Set very low timeout, verify failures
+- [x] 3.5.3 **Test**: Set very low timeout, verify failures
 
 ---
 

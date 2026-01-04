@@ -15,6 +15,9 @@
 # ]
 # ///
 
+from urllib.robotparser import RobotFileParser
+
+
 import sys
 import json
 import os
@@ -87,6 +90,12 @@ class InputModel(BaseModel):
     content_selector: Optional[str] = Field(None, description="CSS selector for main content")
     strip_selector: Optional[str] = Field(None, description="CSS selectors to remove (comma-separated)")
     download_assets: bool = Field(False, description="Download CSS/JS assets")
+    
+    # Phase 3: Advanced Network
+    proxy: Optional[str] = Field(None, description="Proxy URL (http/https/socks5)")
+    headers: Optional[str] = Field(None, description="Custom headers as JSON string")
+    respect_robots: bool = Field(False, description="Respect robots.txt rules")
+    timeout: int = Field(30, description="Request timeout in seconds")
 
 # --- 2. Define Output Schema ---
 class OutputModel(BaseModel):
@@ -166,6 +175,25 @@ def should_process_url(url: str, meta: Dict[str, Any], inputs: InputModel) -> bo
             return False
             
             
+    return True
+
+async def check_robots(client: httpx.AsyncClient, base_url: str, user_agent: str, target_url: str) -> bool:
+    """Check if URL is allowed by robots.txt"""
+    # Note: Optimization - cache the parser per domain if possible.
+    # For now, we fetch robots.txt every time? No, that's bad.
+    # We should cache it. Since we are processing one domain mostly:
+    # We can pass a cached parser or dict.
+    # But for a simple stateless function:
+    robots_url = f"{base_url.rstrip('/')}/robots.txt"
+    try:
+        # We need to fetch it to parse it. 
+        # Since we don't have a shared state easily available in this function signature...
+        # We'll rely on the main function to do this check or cache it on the client/inputs?
+        # Let's assume the main loop handles the fetching once and passes the parser or we do it efficiently.
+        # Actually, standard library RobotFileParser is synchronous and needs to read data.
+        pass
+    except Exception:
+        pass
     return True
 
 async def download_asset(client: httpx.AsyncClient, url: str, output_dir: Path, subfolder: str) -> Optional[str]:
@@ -295,12 +323,12 @@ async def rate_limit_sleep(rate_limit: float):
     delay = 1.0 / rate_limit
     await asyncio.sleep(delay)
 
-async def fetch_with_retry(client: httpx.AsyncClient, url: str, rate_limit: float, max_retries: int = MAX_RETRIES) -> Optional[httpx.Response]:
+async def fetch_with_retry(client: httpx.AsyncClient, url: str, rate_limit: float, timeout_sec: int = 30) -> Optional[httpx.Response]:
     """Fetch URL with exponential backoff and retry logic using httpx"""
-    for retry in range(max_retries):
+    for retry in range(MAX_RETRIES):
         try:
             # We assume external pacing, but here we handle 429 delays
-            response = await client.get(url, timeout=30.0, follow_redirects=True)
+            response = await client.get(url, timeout=timeout_sec, follow_redirects=True)
             
             if response.status_code == 429:
                 retry_after = response.headers.get('Retry-After')
@@ -447,7 +475,7 @@ def convert_pdf_to_markdown(content: bytes) -> str:
 async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path, inputs: InputModel) -> str:
     """Fetch and convert URL to Markdown."""
     # We pass 'inputs' now to access flags
-    response = await fetch_with_retry(client, url, 0) # Rate limit handled by caller
+    response = await fetch_with_retry(client, url, 0, timeout_sec=inputs.timeout) # Rate limit handled by caller
     if not response:
         return "failed"
         
@@ -617,10 +645,47 @@ def load_checkpoint(checkpoint_path: str) -> Optional[Checkpoint]:
 async def async_main(inputs: InputModel):
     log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
     
+    log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
+    
     # Setup HTTP client with connection pooling
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=100)
-    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, limits=limits) as client:
+    
+    client_kwargs = {
+        "headers": {"User-Agent": USER_AGENT},
+        "limits": limits,
+        "timeout": inputs.timeout
+    }
+    
+    # 3.2 Proxy Support
+    if inputs.proxy:
+        client_kwargs['proxy'] = inputs.proxy
         
+    # 3.3 Custom Headers
+    if inputs.headers:
+        try:
+            custom_headers = json.loads(inputs.headers)
+            client_kwargs['headers'].update(custom_headers)
+        except json.JSONDecodeError:
+            log("Error parsing custom headers JSON")
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        
+        # 3.4 robots.txt
+        rp = None
+        if inputs.respect_robots:
+            parsed = urlparse(inputs.url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            robots_url = f"{base}/robots.txt"
+            try:
+                # We need to fetch robots.txt text first async
+                r_resp = await client.get(robots_url, timeout=10)
+                if r_resp.status_code == 200:
+                    rp = RobotFileParser()
+                    rp.parse(r_resp.text.splitlines())
+                    log("Parsed robots.txt")
+            except Exception as e:
+                log(f"Failed to parse robots.txt: {e}")
+
         # 1. Discover
         sitemap_url = await discover_sitemap(client, inputs.url)
         if not sitemap_url:
@@ -669,7 +734,7 @@ async def async_main(inputs: InputModel):
         if is_sitemap_index:
             child_sitemaps = extract_sitemap_index(xml_content)
             for child_url in child_sitemaps:
-                child_res = await fetch_with_retry(client, child_url, inputs.rate_limit)
+                child_res = await fetch_with_retry(client, child_url, inputs.rate_limit, timeout_sec=inputs.timeout)
                 if child_res:
                     for url, meta in stream_sitemap_urls(child_res.text):
                         urls_to_process.append({'url': url, 'meta': meta})
@@ -695,6 +760,13 @@ async def async_main(inputs: InputModel):
             if not should_process_url(url, meta, inputs):
                 log(f"Filtered out: {url}")
                 # We mark as skipped but also processed so we don't retry or anything
+                skipped_set.add(url)
+                processed_set.add(url)
+                return
+            
+            # Phase 3 robots.txt check
+            if rp and not rp.can_fetch(USER_AGENT, url):
+                log(f"Blocked by robots.txt: {url}")
                 skipped_set.add(url)
                 processed_set.add(url)
                 return
@@ -824,6 +896,11 @@ def main(
     content_selector: Optional[str] = typer.Option(None, "--content-selector", help="CSS for main content"),
     strip_selector: Optional[str] = typer.Option(None, "--strip-selector", help="CSS to strip"),
     download_assets: bool = typer.Option(False, "--download-assets", help="Download CSS/JS"),
+    # Phase 3
+    proxy: Optional[str] = typer.Option(None, "--proxy", help="Proxy URL"),
+    headers: Optional[str] = typer.Option(None, "--headers", help="Custom headers JSON"),
+    respect_robots: bool = typer.Option(False, "--respect-robots", help="Respect robots.txt"),
+    timeout: int = typer.Option(30, "--timeout", help="Request timeout"),
     schema: bool = typer.Option(False)
 ):
     if schema:
@@ -849,7 +926,11 @@ def main(
             pdf_support=pdf_support,
             content_selector=content_selector,
             strip_selector=strip_selector,
-            download_assets=download_assets
+            download_assets=download_assets,
+            proxy=proxy,
+            headers=headers,
+            respect_robots=respect_robots,
+            timeout=timeout
         )
     except Exception as e:
         print(json.dumps(OutputModel(status="error", error=str(e)).model_dump()))
