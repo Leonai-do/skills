@@ -9,7 +9,9 @@
 #     "html2text",
 #     "beautifulsoup4",
 #     "python-dateutil",
-#     "pybloom-live"
+#     "pybloom-live",
+#     "readability-lxml",
+#     "pypdf"
 # ]
 # ///
 
@@ -34,6 +36,19 @@ import aiofiles
 import html2text
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
+import mimetypes
+from io import BytesIO
+
+# Phase 2 Imports
+try:
+    from readability import Document
+except ImportError:
+    Document = None
+
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
 
 try:
     from pybloom_live import BloomFilter
@@ -64,6 +79,14 @@ class InputModel(BaseModel):
     exclude_paths: Optional[str] = Field(None, description="Comma-separated paths to exclude")
     priority_min: Optional[float] = Field(None, description="Minimum priority included")
     changefreq: Optional[str] = Field(None, description="Change frequency to include")
+    
+    # Phase 2: Content Processing
+    extract_main: bool = Field(False, description="Extract main content using readability")
+    download_images: bool = Field(False, description="Download images locally")
+    pdf_support: bool = Field(False, description="Convert PDFs to Markdown")
+    content_selector: Optional[str] = Field(None, description="CSS selector for main content")
+    strip_selector: Optional[str] = Field(None, description="CSS selectors to remove (comma-separated)")
+    download_assets: bool = Field(False, description="Download CSS/JS assets")
 
 # --- 2. Define Output Schema ---
 class OutputModel(BaseModel):
@@ -142,7 +165,47 @@ def should_process_url(url: str, meta: Dict[str, Any], inputs: InputModel) -> bo
         if cf != inputs.changefreq.lower():
             return False
             
+            
     return True
+
+async def download_asset(client: httpx.AsyncClient, url: str, output_dir: Path, subfolder: str) -> Optional[str]:
+    """Download asset and return relative path"""
+    try:
+        # Simple fetch, maybe less retries needed for assets? using same for robustness
+        response = await client.get(url, timeout=15.0, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+            
+        # Determine filename
+        parsed = urlparse(url)
+        name = Path(parsed.path).name or "asset"
+        if not Path(name).suffix:
+            ext = mimetypes.guess_extension(response.headers.get('content-type', ''))
+            if ext:
+                name += ext
+        
+        # Hash to prevent collisions/duplicates
+        digest = hashlib.md5(url.encode()).hexdigest()[:8]
+        stem = Path(name).stem
+        suffix = Path(name).suffix
+        safe_name = f"{stem}_{digest}{suffix}"
+        
+        asset_dir = output_dir / "_assets" / subfolder
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        
+        save_path = asset_dir / safe_name
+        async with aiofiles.open(save_path, 'wb') as f:
+            await f.write(response.content)
+            
+        # Return relative path from the markdown file's perspective? 
+        # Actually usually relative to root of output.
+        # Markdown files can be deep in subdirs.
+        # We need to return path relative to output_dir, then fix it up in caller?
+        # Let's return path relative to output_dir.
+        return f"_assets/{subfolder}/{safe_name}"
+    except Exception as e:
+        log(f"Failed to download asset {url}: {e}")
+        return None
 
 def resolve_collision(base_path: Path, relative_path: Path) -> Path:
     """
@@ -366,29 +429,132 @@ def extract_sitemap_index(xml_content: str) -> list:
         log(f"XML parsing error in sitemap index: {e}")
     return sitemaps
 
-async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path) -> str:
+def convert_pdf_to_markdown(content: bytes) -> str:
+    """Convert PDF bytes to Markdown text"""
+    if not PdfReader:
+        return "Error: pypdf not installed"
+    try:
+        reader = PdfReader(BytesIO(content))
+        text = []
+        for page in reader.pages:
+            extract = page.extract_text()
+            if extract:
+                text.append(extract)
+        return "\n\n".join(text)
+    except Exception as e:
+        return f"Error converting PDF: {e}"
+
+async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path, inputs: InputModel) -> str:
     """Fetch and convert URL to Markdown."""
+    # We pass 'inputs' now to access flags
     response = await fetch_with_retry(client, url, 0) # Rate limit handled by caller
     if not response:
         return "failed"
         
     content_type = response.headers.get('Content-Type', '').lower()
+    
+    # PDF Support
+    if 'application/pdf' in content_type:
+        if inputs.pdf_support and PdfReader:
+            text = convert_pdf_to_markdown(response.content)
+            rel_path = sanitize_filename(url)
+            rel_path = rel_path.with_suffix('.md') # Ensure .md
+            rel_path = resolve_collision(output_dir, rel_path)
+            save_path = output_dir / rel_path
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            header = f"---\nurl: {url}\ntype: pdf\ndate: {datetime.now().isoformat()}\n---\n\n"
+            async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
+                await f.write(header + text)
+            log(f"Saved PDF: {url} -> {rel_path}")
+            return "success"
+        else:
+            return "skipped"
+
     if 'text/html' not in content_type:
         return "skipped"
         
     try:
         html = response.text
+        
+        # 2.1 Main Content Extraction (Readability)
+        if inputs.extract_main and Document:
+            try:
+                doc = Document(html)
+                html = doc.summary() # This returns HTML of the main content
+            except Exception as e:
+                log(f"Readability failed for {url}: {e}")
+                
         soup = BeautifulSoup(html, 'html.parser')
         
-        for tag in soup(['script', 'style', 'nav', 'footer', 'iframe', 'noscript']):
-            tag.decompose()
-            
-        # Absolutify URLs
+        # 2.4 Custom Selectors (Strip)
+        if inputs.strip_selector:
+            for selector in inputs.strip_selector.split(','):
+                if selector.strip():
+                    for elem in soup.select(selector.strip()):
+                        elem.decompose()
+        
+        # 2.4 Custom Selectors (Content)
+        if inputs.content_selector:
+            main = soup.select_one(inputs.content_selector)
+            if main:
+                soup = BeautifulSoup(str(main), 'html.parser') # Create new soup from selection
+        elif not inputs.extract_main:
+             # Default generic cleaning if not using readability or custom selector
+            for tag in soup(['script', 'style', 'nav', 'footer', 'iframe', 'noscript']):
+                tag.decompose()
+        
+        # 2.2 / 2.5 Asset/Image Downloading & Rewriting
+        # We need to process tags
+        tasks = []
+        
+        # Images
+        if inputs.download_images:
+            for img in soup.find_all('img'):
+                src = img.get('src')
+                if src:
+                    abs_url = urljoin(url, src)
+                    # We can't await easily inside loop if we want parallelism?
+                    # For now linear or create list of tasks.
+                    # Let's do it sequentially for simplicity or simple gather?
+                    # Modifying soup in place after download.
+                    asset_path = await download_asset(client, abs_url, output_dir, "images")
+                    if asset_path:
+                         # We need to make this path relative to the markdown file?
+                         # The markdown file is at `rel_path`. 
+                         # `asset_path` is relative to `output_dir`.
+                         # We'll calculate this later or just use absolute/root relative.
+                         # Markdown standard often expects relative to file.
+                         img['src'] = asset_path
+                         
+        # Assets (CSS/JS)
+        if inputs.download_assets:
+            # CSS
+            for link in soup.find_all('link', rel='stylesheet'):
+                href = link.get('href')
+                if href:
+                    abs_url = urljoin(url, href)
+                    asset_path = await download_asset(client, abs_url, output_dir, "css")
+                    if asset_path:
+                        link['href'] = asset_path
+            # JS
+            for script in soup.find_all('script', src=True):
+                src = script.get('src')
+                if src:
+                    abs_url = urljoin(url, src)
+                    asset_path = await download_asset(client, abs_url, output_dir, "js")
+                    if asset_path:
+                        script['src'] = asset_path
+
+        # Absolutify remaining URLs (if not downloaded)
         for tag in soup.find_all(['a', 'img']):
             if tag.has_attr('href'):
-                tag['href'] = urljoin(url, tag['href'])
+                # Don't overwrite if we just rewrote it to local
+                if not tag['href'].startswith('_assets/'):
+                     tag['href'] = urljoin(url, tag['href'])
             if tag.has_attr('src'):
-                tag['src'] = urljoin(url, tag['src'])
+                if not tag['src'].startswith('_assets/'):
+                    tag['src'] = urljoin(url, tag['src'])
                 
         # Convert
         converter = html2text.HTML2Text()
@@ -401,11 +567,23 @@ async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path) -> 
         
         rel_path = sanitize_filename(url)
         rel_path = resolve_collision(output_dir, rel_path)
-        save_path = output_dir / rel_path
         
+        # Fixup asset paths to be relative to the markdown file
+        # Current asset paths are `_assets/...`. Markdown file is `foo/bar.md`.
+        # We need `../../_assets/...`
+        # Simple string replace? Or robust path calculation?
+        # Let's simple string replace `_assets/` with `rel_to_root/_assets/`
+        depth = len(rel_path.parts) - 1
+        if depth > 0:
+            prefix = "../" * depth
+            markdown = markdown.replace("_assets/", f"{prefix}_assets/")
+            # Also need to fix up HTML attributes if we kept them? 
+            # html2text keeps some attributes.
+            
+        save_path = output_dir / rel_path
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
-        header = f"---\nurl: {url}\ndate: {datetime.utcnow().isoformat()}\n---\n\n"
+        header = f"---\nurl: {url}\ndate: {datetime.now().isoformat()}\n---\n\n"
         
         async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
             await f.write(header + markdown)
@@ -540,7 +718,7 @@ async def async_main(inputs: InputModel):
             
             async with semaphore:
                 await rate_limit_sleep(inputs.rate_limit / inputs.concurrency) # Shared rate limit approx
-                status = await process_url(client, url, output_dir)
+                status = await process_url(client, url, output_dir, inputs)
                 
             if status == "success":
                 processed_set.add(url)
@@ -587,7 +765,7 @@ async def async_main(inputs: InputModel):
             # Simple retry without concurrency for safety? Or same worker
             for url in retry_list:
                 # Re-use worker logic roughly... simplified here
-                status = await process_url(client, url, output_dir)
+                status = await process_url(client, url, output_dir, inputs)
                 if status == "success":
                     processed_set.add(url)
                     total_processed += 1
@@ -639,6 +817,13 @@ def main(
     exclude_paths: Optional[str] = typer.Option(None, "--exclude-paths", help="Comma-separated paths to exclude"),
     priority_min: Optional[float] = typer.Option(None, "--priority-min", help="Min priority"),
     changefreq: Optional[str] = typer.Option(None, "--changefreq", help="Specific changefreq"),
+    # Phase 2
+    extract_main: bool = typer.Option(False, "--extract-main", help="Use Readability for main content"),
+    download_images: bool = typer.Option(False, "--download-images", help="Download images locally"),
+    pdf_support: bool = typer.Option(False, "--pdf-support", help="Convert PDFs"),
+    content_selector: Optional[str] = typer.Option(None, "--content-selector", help="CSS for main content"),
+    strip_selector: Optional[str] = typer.Option(None, "--strip-selector", help="CSS to strip"),
+    download_assets: bool = typer.Option(False, "--download-assets", help="Download CSS/JS"),
     schema: bool = typer.Option(False)
 ):
     if schema:
@@ -658,7 +843,13 @@ def main(
             include_paths=include_paths,
             exclude_paths=exclude_paths,
             priority_min=priority_min,
-            changefreq=changefreq
+            changefreq=changefreq,
+            extract_main=extract_main,
+            download_images=download_images,
+            pdf_support=pdf_support,
+            content_selector=content_selector,
+            strip_selector=strip_selector,
+            download_assets=download_assets
         )
     except Exception as e:
         print(json.dumps(OutputModel(status="error", error=str(e)).model_dump()))

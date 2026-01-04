@@ -84,15 +84,15 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 2.1 Main Content Extraction (Readability)
 
-- [ ] 2.1.1 **Add dependency**: `readability-lxml` to script header
+- [x] 2.1.1 **Add dependency**: `readability-lxml` to script header
   - **Line**: Add to `# dependencies = [...]`
 
-- [ ] 2.1.2 **Add CLI flag**: `--extract-main`
+- [x] 2.1.2 **Add CLI flag**: `--extract-main`
   - **Type**: Boolean flag
 
-- [ ] 2.1.3 **Install readability**: `from readability import Document`
+- [x] 2.1.3 **Install readability**: `from readability import Document`
 
-- [ ] 2.1.4 **Extract main content in `process_url`**
+- [x] 2.1.4 **Extract main content in `process_url`**
   - **Implementation**:
     ```python
     if inputs.extract_main:
@@ -101,33 +101,33 @@ This document contains **7 phases** of enhancements. Each phase is independent a
     ```
   - **Location**: After fetching HTML, before BeautifulSoup parsing
 
-- [ ] 2.1.5 **Test**: Compare output with/without `--extract-main` on page with ads
+- [x] 2.1.5 **Test**: Compare output with/without `--extract-main` on page with ads
   - **Assertion**: Verify ads/nav removed in extracted version
 
 ### 2.2 Image Downloading
 
-- [ ] 2.2.1 **Add CLI flag**: `--download-images`
+- [x] 2.2.1 **Add CLI flag**: `--download-images`
 
-- [ ] 2.2.2 **Create function**: `def download_image(url: str, output_dir: Path) -> str`
+- [x] 2.2.2 **Create function**: `def download_image(url: str, output_dir: Path) -> str`
   - **Implementation**: Fetch image, save to `_images/<hash>.ext`
   - **Return**: Local relative path
 
-- [ ] 2.2.3 **Modify image URL rewriting in `process_url`**
+- [x] 2.2.3 **Modify image URL rewriting in `process_url`**
   - **Current**: Absolutifies URLs
   - **New**: If `--download-images`, download and rewrite to local path
 
-- [ ] 2.2.4 **Handle image extensions**
+- [x] 2.2.4 **Handle image extensions**
   - **Implementation**: Use `mimetypes.guess_extension(content_type)`
 
-- [ ] 2.2.5 **Test**: Verify images downloaded and paths rewritten
+- [x] 2.2.5 **Test**: Verify images downloaded and paths rewritten
 
 ### 2.3 PDF Support
 
-- [ ] 2.3.1 **Add dependency**: `pypdf` to script header
+- [x] 2.3.1 **Add dependency**: `pypdf` to script header
 
-- [ ] 2.3.2 **Add CLI flag**: `--pdf-support`
+- [x] 2.3.2 **Add CLI flag**: `--pdf-support`
 
-- [ ] 2.3.3 **Create function**: `def convert_pdf_to_markdown(url: str, response: Response) -> str`
+- [x] 2.3.3 **Create function**: `def convert_pdf_to_markdown(url: str, response: Response) -> str`
   - **Implementation**:
     ```python
     from pypdf import PdfReader
@@ -137,21 +137,21 @@ This document contains **7 phases** of enhancements. Each phase is independent a
     return text
     ```
 
-- [ ] 2.3.4 **Check Content-Type in `process_url`**
+- [x] 2.3.4 **Check Content-Type in `process_url`**
   - **Current**: Skips non-HTML
   - **New**: If `application/pdf` and `--pdf-support`, convert PDF
 
-- [ ] 2.3.5 **Test**: Test with sample PDF URL
+- [x] 2.3.5 **Test**: Test with sample PDF URL
 
 ### 2.4 Custom CSS Selectors
 
-- [ ] 2.4.1 **Add CLI flags**: `--content-selector <css>` and `--strip-selector <css>`
+- [x] 2.4.1 **Add CLI flags**: `--content-selector <css>` and `--strip-selector <css>`
   - **Example**: `--content-selector "#main-content"`
 
-- [ ] 2.4.2 **Parse multiple selectors**
+- [x] 2.4.2 **Parse multiple selectors**
   - **Implementation**: Accept comma-separated: `"#main, .content"`
 
-- [ ] 2.4.3 **Apply content selector**
+- [x] 2.4.3 **Apply content selector**
   - **Implementation**:
     ```python
     if inputs.content_selector:
@@ -160,7 +160,7 @@ This document contains **7 phases** of enhancements. Each phase is independent a
             soup = main
     ```
 
-- [ ] 2.4.4 **Apply strip selectors**
+- [x] 2.4.4 **Apply strip selectors**
   - **Implementation**:
     ```python
     if inputs.strip_selector:
@@ -169,22 +169,22 @@ This document contains **7 phases** of enhancements. Each phase is independent a
                 elem.decompose()
     ```
 
-- [ ] 2.4.5 **Test**: Apply selectors on sample HTML, verify correct extraction
+- [x] 2.4.5 **Test**: Apply selectors on sample HTML, verify correct extraction
 
 ### 2.5 Asset Downloading
 
-- [ ] 2.5.1 **Add CLI flag**: `--download-assets`
+- [x] 2.5.1 **Add CLI flag**: `--download-assets`
 
-- [ ] 2.5.2 **Create function**: `def download_asset(url: str, asset_type: str, output_dir: Path) -> str`
+- [x] 2.5.2 **Create function**: `def download_asset(url: str, asset_type: str, output_dir: Path) -> str`
   - **Types**: `css`, `js`, `font`
 
-- [ ] 2.5.3 **Parse HTML for asset links**
+- [x] 2.5.3 **Parse HTML for asset links**
   - **Implementation**: Find all `<link rel="stylesheet">`, `<script src>`, etc.
 
-- [ ] 2.5.4 **Download and rewrite paths**
+- [x] 2.5.4 **Download and rewrite paths**
   - **Save to**: `_assets/css/`, `_assets/js/`, `_assets/fonts/`
 
-- [ ] 2.5.5 **Test**: Verify complete offline viewing capability
+- [x] 2.5.5 **Test**: Verify complete offline viewing capability
 
 ---
 

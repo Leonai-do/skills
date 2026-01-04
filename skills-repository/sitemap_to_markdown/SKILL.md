@@ -71,14 +71,30 @@ python skills-repository/sitemap_to_markdown/sitemap_to_markdown.py --url "https
 
 ## CLI Options
 
-| Option          | Type   | Default  | Description                     |
-| --------------- | ------ | -------- | ------------------------------- |
-| `--url`         | string | required | Base URL or direct sitemap URL  |
-| `--output`      | path   | auto     | Custom output file path         |
-| `--rate-limit`  | float  | 1.0      | Requests per second             |
-| `--batch-size`  | int    | 1000     | URLs processed per batch        |
-| `--concurrency` | int    | 5        | Max concurrent requests (async) |
-| `--schema`      | flag   | -        | Print JSON schema and exit      |
+| Option               | Type   | Default  | Description                         |
+| -------------------- | ------ | -------- | ----------------------------------- |
+| `--url`              | string | required | Base URL or direct sitemap URL      |
+| `--output`           | path   | auto     | Custom output file path             |
+| `--rate-limit`       | float  | 1.0      | Requests per second                 |
+| `--batch-size`       | int    | 1000     | URLs processed per batch            |
+| `--concurrency`      | int    | 5        | Max concurrent requests (async)     |
+| `--update`           | flag   | -        | Only fetch new/changed pages        |
+| `--max-pages`        | int    | 10000    | Max pages to process                |
+| **Filtering**        |        |          |                                     |
+| `--include-pattern`  | regex  | -        | Process only URLs matching regex    |
+| `--exclude-pattern`  | regex  | -        | Skip URLs matching regex            |
+| `--include-paths`    | string | -        | Comma-separated path prefixes       |
+| `--exclude-paths`    | string | -        | Comma-separated path prefixes       |
+| `--priority-min`     | float  | -        | Min sitemap priority to process     |
+| `--changefreq`       | string | -        | Specific changefreq to process      |
+| **Content**          |        |          |                                     |
+| `--extract-main`     | flag   | -        | Use Readability for main content    |
+| `--download-images`  | flag   | -        | Download images to `_assets/images` |
+| `--download-assets`  | flag   | -        | Download CSS/JS to `_assets`        |
+| `--pdf-support`      | flag   | -        | Convert PDF files to Text/MD        |
+| `--content-selector` | css    | -        | Extract content matching CSS        |
+| `--strip-selector`   | css    | -        | Remove elements matching CSS        |
+| `--schema`           | flag   | -        | Print JSON schema and exit          |
 
 ## Decision Logic
 
