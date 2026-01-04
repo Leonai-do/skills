@@ -71,13 +71,14 @@ python skills-repository/sitemap_to_markdown/sitemap_to_markdown.py --url "https
 
 ## CLI Options
 
-| Option         | Type   | Default  | Description                    |
-| -------------- | ------ | -------- | ------------------------------ |
-| `--url`        | string | required | Base URL or direct sitemap URL |
-| `--output`     | path   | auto     | Custom output file path        |
-| `--rate-limit` | float  | 1.0      | Requests per second            |
-| `--batch-size` | int    | 1000     | URLs processed per batch       |
-| `--schema`     | flag   | -        | Print JSON schema and exit     |
+| Option          | Type   | Default  | Description                     |
+| --------------- | ------ | -------- | ------------------------------- |
+| `--url`         | string | required | Base URL or direct sitemap URL  |
+| `--output`      | path   | auto     | Custom output file path         |
+| `--rate-limit`  | float  | 1.0      | Requests per second             |
+| `--batch-size`  | int    | 1000     | URLs processed per batch        |
+| `--concurrency` | int    | 5        | Max concurrent requests (async) |
+| `--schema`      | flag   | -        | Print JSON schema and exit      |
 
 ## Decision Logic
 

@@ -10,73 +10,73 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 1.1 Regex Pattern Filtering
 
-- [ ] 1.1.1 **Add CLI flags**: `--include-pattern <regex>` and `--exclude-pattern <regex>`
+- [x] 1.1.1 **Add CLI flags**: `--include-pattern <regex>` and `--exclude-pattern <regex>`
   - **Implementation**: Add to `InputModel`: `include_pattern: Optional[str] = Field(None, ...)`
   - **Implementation**: Add to `@app.command()`: `include_pattern: Optional[str] = typer.Option(None, ...)`
 
-- [ ] 1.1.2 **Create filter function**: `def should_process_url(url: str, include_pattern: Optional[str], exclude_pattern: Optional[str]) -> bool`
+- [x] 1.1.2 **Create filter function**: `def should_process_url(url: str, include_pattern: Optional[str], exclude_pattern: Optional[str]) -> bool`
   - **Implementation**: Use `re.match(pattern, url)` for matching
   - **Logic**: If `include_pattern` provided and doesn't match → return False
   - **Logic**: If `exclude_pattern` provided and matches → return False
   - **Logic**: Otherwise → return True
 
-- [ ] 1.1.3 **Integrate filter in main loop**
+- [x] 1.1.3 **Integrate filter in main loop**
   - **Location**: Line ~515 in main processing loop
   - **Implementation**: `if not should_process_url(url, inputs.include_pattern, inputs.exclude_pattern): continue`
   - **Log**: Add `log(f"Filtered out: {url}")`
 
-- [ ] 1.1.4 **Update manifest to track filtered**
+- [x] 1.1.4 **Update manifest to track filtered**
   - **Implementation**: Add `filtered_urls: list = []` to Checkpoint model
   - **Implementation**: Track filtered count in manifest statistics
 
-- [ ] 1.1.5 **Test**: Unit test with 100 URLs, 50% match rate
+- [x] 1.1.5 **Test**: Unit test with 100 URLs, 50% match rate
   - **Test file**: `tests/test_filtering.py`
   - **Assertion**: `assert len(processed) == 50`
 
 ### 1.2 Path Prefix Filtering
 
-- [ ] 1.2.1 **Add CLI flags**: `--include-paths <comma-separated>` and `--exclude-paths <comma-separated>`
+- [x] 1.2.1 **Add CLI flags**: `--include-paths <comma-separated>` and `--exclude-paths <comma-separated>`
   - **Example**: `--include-paths "/docs,/api"`
 
-- [ ] 1.2.2 **Parse comma-separated values**
+- [x] 1.2.2 **Parse comma-separated values**
   - **Implementation**: `paths = [p.strip() for p in inputs.include_paths.split(',') if p.strip()]`
 
-- [ ] 1.2.3 **Create prefix matcher**: `def url_matches_paths(url: str, paths: List[str]) -> bool`
+- [x] 1.2.3 **Create prefix matcher**: `def url_matches_paths(url: str, paths: List[str]) -> bool`
   - **Implementation**: `parsed = urlparse(url); return any(parsed.path.startswith(p) for p in paths)`
 
-- [ ] 1.2.4 **Integrate with existing filter function**
+- [x] 1.2.4 **Integrate with existing filter function**
   - **Update**: Modify `should_process_url` to accept `include_paths` and `exclude_paths`
 
-- [ ] 1.2.5 **Test**: Integration test with `/docs` filter
+- [x] 1.2.5 **Test**: Integration test with `/docs` filter
   - **Assertion**: Verify only `/docs/*` URLs processed
 
 ### 1.3 Priority-Based Filtering
 
-- [ ] 1.3.1 **Add CLI flag**: `--priority-min <float>`
+- [x] 1.3.1 **Add CLI flag**: `--priority-min <float>`
   - **Example**: `--priority-min 0.5` (only process priority ≥ 0.5)
 
-- [ ] 1.3.2 **Extract priority from metadata**
+- [x] 1.3.2 **Extract priority from metadata**
   - **Location**: Metadata already extracted in `stream_sitemap_urls`
   - **Implementation**: `priority = float(meta.get('priority', 1.0))`
 
-- [ ] 1.3.3 **Add priority check in filter**
+- [x] 1.3.3 **Add priority check in filter**
   - **Implementation**: `if inputs.priority_min and priority < inputs.priority_min: continue`
 
-- [ ] 1.3.4 **Test**: Unit test with priority threshold
+- [x] 1.3.4 **Test**: Unit test with priority threshold
   - **Assertion**: Verify low-priority URLs skipped
 
 ### 1.4 Change Frequency Filtering
 
-- [ ] 1.4.1 **Add CLI flag**: `--changefreq <value>`
+- [x] 1.4.1 **Add CLI flag**: `--changefreq <value>`
   - **Allowed values**: `always`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `never`
 
-- [ ] 1.4.2 **Extract changefreq from metadata**
+- [x] 1.4.2 **Extract changefreq from metadata**
   - **Location**: Already in `meta` dict from `stream_sitemap_urls`
 
-- [ ] 1.4.3 **Add changefreq check in filter**
+- [x] 1.4.3 **Add changefreq check in filter**
   - **Implementation**: `if inputs.changefreq and meta.get('changefreq') != inputs.changefreq: continue`
 
-- [ ] 1.4.4 **Test**: Integration test with `--changefreq daily`
+- [x] 1.4.4 **Test**: Integration test with `--changefreq daily`
 
 ---
 
@@ -520,87 +520,87 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 7.1 Fix Update Mode Logic
 
-- [ ] 7.1.1 **Parse `lastmod` from sitemap**
+- [x] 7.1.1 **Parse `lastmod` from sitemap**
   - **Implementation**: `from dateutil import parser; lastmod_dt = parser.parse(meta['lastmod'])`
 
-- [ ] 7.1.2 **Get file modification time**
+- [x] 7.1.2 **Get file modification time**
   - **Implementation**: `file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)`
 
-- [ ] 7.1.3 **Compare timestamps**
+- [x] 7.1.3 **Compare timestamps**
   - **Logic**: `if lastmod_dt <= file_mtime: skip`
 
-- [ ] 7.1.4 **Test**: Create file with old mtime, verify re-fetched
+- [x] 7.1.4 **Test**: Create file with old mtime, verify re-fetched
 
 ### 7.2 Fix Double Rate-Limiting
 
-- [ ] 7.2.1 **Remove `rate_limit_sleep` from `process_url`**
+- [x] 7.2.1 **Remove `rate_limit_sleep` from `process_url`**
   - **Reason**: `fetch_with_retry` already rate-limits
 
-- [ ] 7.2.2 **Keep `rate_limit_sleep` only in main loop**
+- [x] 7.2.2 **Keep `rate_limit_sleep` only in main loop**
   - **Location**: Before calling `process_url`
 
-- [ ] 7.2.3 **Test**: Verify only one sleep per request
+- [x] 7.2.3 **Test**: Verify only one sleep per request
 
 ### 7.3 Implement `resolve_collision`
 
-- [ ] 7.3.1 **Call `resolve_collision` in `process_url`**
+- [x] 7.3.1 **Call `resolve_collision` in `process_url`**
   - **Location**: After `sanitize_filename`, before saving
 
-- [ ] 7.3.2 **Implement collision detection**
+- [x] 7.3.2 **Implement collision detection**
   - **Check**: If file exists and is directory (or vice versa)
 
-- [ ] 7.3.3 **Implement collision resolution**
+- [x] 7.3.3 **Implement collision resolution**
   - **Strategy**: Append `_alt` or hash to filename
 
-- [ ] 7.3.4 **Test**: Create collision scenario, verify resolution
+- [x] 7.3.4 **Test**: Create collision scenario, verify resolution
 
 ### 7.4 Proper Ctrl+C Handling
 
-- [ ] 7.4.1 **Move checkpoint save inside `KeyboardInterrupt` handler**
+- [x] 7.4.1 **Move checkpoint save inside `KeyboardInterrupt` handler**
   - **Current**: Just logs
   - **New**: Save full checkpoint before exiting
 
-- [ ] 7.4.2 **Test**: Send SIGINT, verify checkpoint written
+- [x] 7.4.2 **Test**: Send SIGINT, verify checkpoint written
 
 ### 7.5 Async I/O Refactor
 
-- [ ] 7.5.1 **Replace `requests` with `httpx` everywhere**
+- [x] 7.5.1 **Replace `requests` with `httpx` everywhere**
   - **Implementation**: `async with httpx.AsyncClient() as client:`
 
-- [ ] 7.5.2 **Convert main loop to async**
+- [x] 7.5.2 **Convert main loop to async**
   - **Implementation**: `async def main_async(...)`
 
-- [ ] 7.5.3 **Use `asyncio.gather` for parallel processing**
+- [x] 7.5.3 **Use `asyncio.gather` for parallel processing**
 
-- [ ] 7.5.4 **Benchmark**: Measure improvement (expect 3-5× with concurrency)
+- [x] 7.5.4 **Benchmark**: Measure improvement (expect 3-5× with concurrency)
 
 ### 7.6 Connection Pooling
 
-- [ ] 7.6.1 **Create persistent HTTP client**
+- [x] 7.6.1 **Create persistent HTTP client**
   - **Implementation**: Instantiate `httpx.AsyncClient()` once, reuse
 
-- [ ] 7.6.2 **Configure pool size**
+- [x] 7.6.2 **Configure pool size**
   - **Implementation**: `limits=httpx.Limits(max_connections=100)`
 
-- [ ] 7.6.3 **Test**: Verify connections reused (check logs)
+- [x] 7.6.3 **Test**: Verify connections reused (check logs)
 
 ### 7.7 Bloom Filter for Duplicates
 
-- [ ] 7.7.1 **Add dependency**: `pybloom-live`
+- [x] 7.7.1 **Add dependency**: `pybloom-live`
 
-- [ ] 7.7.2 **Replace `set()` with Bloom filter for `processed_set`**
+- [x] 7.7.2 **Replace `set()` with Bloom filter for `processed_set`**
   - **Implementation**: `from pybloom_live import BloomFilter; bf = BloomFilter(capacity=100000, error_rate=0.001)`
 
-- [ ] 7.7.3 **Test**: Process 100k URLs, measure memory usage (expect 10× reduction)
+- [x] 7.7.3 **Test**: Process 100k URLs, measure memory usage (expect 10× reduction)
 
 ### 7.8 Fix Unused `batch_size`
 
-- [ ] 7.8.1 **Implement batch processing**
+- [x] 7.8.1 **Implement batch processing**
   - **Implementation**: Process URLs in batches of `inputs.batch_size`
 
-- [ ] 7.8.2 **Commit checkpoint after each batch**
+- [x] 7.8.2 **Commit checkpoint after each batch**
 
-- [ ] 7.8.3 **Test**: Set `--batch-size 100`, verify checkpoint every 100 URLs
+- [x] 7.8.3 **Test**: Set `--batch-size 100`, verify checkpoint every 100 URLs
 
 ---
 

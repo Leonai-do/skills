@@ -4,9 +4,12 @@
 # dependencies = [
 #     "typer",
 #     "pydantic",
-#     "requests",
+#     "httpx",
+#     "aiofiles",
 #     "html2text",
 #     "beautifulsoup4",
+#     "python-dateutil",
+#     "pybloom-live"
 # ]
 # ///
 
@@ -16,18 +19,27 @@ import os
 import re
 import random
 import time
+import asyncio
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import hashlib
-from urllib.parse import urlparse, unquote
-from typing import Optional, Iterator, Tuple, Dict, Any, Set
+from urllib.parse import urlparse, unquote, urljoin
+from typing import Optional, Iterator, Tuple, Dict, Any, Set, List
 from pathlib import Path
-import html2text
-from bs4 import BeautifulSoup
 
 import typer
 from pydantic import BaseModel, Field
-import requests
+import httpx
+import aiofiles
+import html2text
+from bs4 import BeautifulSoup
+from dateutil import parser as date_parser
+
+try:
+    from pybloom_live import BloomFilter
+    HAS_BLOOM = True
+except ImportError:
+    HAS_BLOOM = False
 
 # --- Constants ---
 NS = '{http://www.sitemaps.org/schemas/sitemap/0.9}'
@@ -44,6 +56,14 @@ class InputModel(BaseModel):
     batch_size: int = Field(DEFAULT_BATCH_SIZE, description="URLs processed per batch (default: 1000)")
     update: bool = Field(False, description="Incremental update: only fetch new/changed pages")
     max_pages: int = Field(10000, description="Maximum number of pages to process (default: 10000)")
+    concurrency: int = Field(5, description="Number of concurrent requests (default: 5)")
+    # Phase 1: Filtering
+    include_pattern: Optional[str] = Field(None, description="Regex pattern to include")
+    exclude_pattern: Optional[str] = Field(None, description="Regex pattern to exclude")
+    include_paths: Optional[str] = Field(None, description="Comma-separated paths to include")
+    exclude_paths: Optional[str] = Field(None, description="Comma-separated paths to exclude")
+    priority_min: Optional[float] = Field(None, description="Minimum priority included")
+    changefreq: Optional[str] = Field(None, description="Change frequency to include")
 
 # --- 2. Define Output Schema ---
 class OutputModel(BaseModel):
@@ -86,13 +106,84 @@ def sanitize_domain(domain: str) -> str:
     """Sanitize domain for safe filename usage"""
     return re.sub(r'[^a-zA-Z0-9.-]', '_', domain)
 
+def should_process_url(url: str, meta: Dict[str, Any], inputs: InputModel) -> bool:
+    """Apply Phase 1 filtering rules"""
+    # 1.1 Regex
+    if inputs.include_pattern and not re.search(inputs.include_pattern, url):
+        return False
+    if inputs.exclude_pattern and re.search(inputs.exclude_pattern, url):
+        return False
+        
+    # 1.2 Paths
+    parsed = urlparse(url)
+    if inputs.include_paths:
+        paths = [p.strip() for p in inputs.include_paths.split(',') if p.strip()]
+        if not any(parsed.path.startswith(p) for p in paths):
+            return False
+            
+    if inputs.exclude_paths:
+        paths = [p.strip() for p in inputs.exclude_paths.split(',') if p.strip()]
+        if any(parsed.path.startswith(p) for p in paths):
+            return False
+            
+    # 1.3 Priority
+    if inputs.priority_min is not None:
+        p_str = meta.get('priority', '0.5')
+        try:
+            priority = float(p_str)
+            if priority < inputs.priority_min:
+                return False
+        except ValueError:
+            pass
+            
+    # 1.4 Changefreq
+    if inputs.changefreq:
+        cf = meta.get('changefreq', '').lower()
+        if cf != inputs.changefreq.lower():
+            return False
+            
+    return True
+
+def resolve_collision(base_path: Path, relative_path: Path) -> Path:
+    """
+    Resolve file system collisions.
+    Ensure we don't try to create a file where a directory exists or vice-versa.
+    Appends a hash if the exact path already exists as a different type.
+    """
+    full_path = base_path / relative_path
+    
+    # Check if a directory exists where we want a file
+    if full_path.is_dir():
+         # Collision: We want index.md but index.md is a dir? Unlikely with .md extension
+         # But if we want `foo` and `foo` is dir
+         stem = full_path.stem
+         suffix = full_path.suffix
+         digest = hashlib.md5(str(full_path).encode()).hexdigest()[:8]
+         new_name = f"{stem}_alt_{digest}{suffix}"
+         return Path(new_name)
+         
+    # Check if a file exists where we want a directory (handled by parents creation usually)
+    # But here we are just returning the file path.
+    # If any parent is a file, we have a problem.
+    # e.g. base/foo is file, we want base/foo/bar.md
+    
+    current = relative_path.parent
+    while current != Path('.'):
+         check_path = base_path / current
+         if check_path.exists() and not check_path.is_dir():
+             # Collision: Parent is a file
+             # We can't fix the parent, so we must rename our path?
+             # This is tricky. simpler to just rename the current file to avoid that tree.
+             # e.g. base/foo_conflict/bar.md
+             digest = hashlib.md5(str(relative_path).encode()).hexdigest()[:8]
+             return Path(f"{relative_path.stem}_{digest}{relative_path.suffix}")
+         current = current.parent
+         
+    return relative_path
+
 def sanitize_filename(url: str) -> Path:
     """
     Convert URL to safe relative path.
-    1. Strip scheme/netloc
-    2. Handle fragments/queries by hashing
-    3. Ensure max length 255 chars
-    4. Handle trailing slash -> index.md
     """
     parsed = urlparse(url)
     path_str = unquote(parsed.path).strip('/')
@@ -104,19 +195,13 @@ def sanitize_filename(url: str) -> Path:
     safe_parts = []
     
     for part in parts:
-        # Sanitize characters: replace invalid chars with _
         safe_part = re.sub(r'[<>:"/\\|?*]', '_', part)
-        
-        # Enforce length limit (leave room for hash/ext)
         if len(safe_part) > 200:
             safe_part = safe_part[:200]
-            
         safe_parts.append(safe_part)
     
-    # Initial path construction
     p = Path(*safe_parts)
     
-    # Handle extension logic
     has_extension = bool(p.suffix)
     is_trailing_slash = url.endswith('/')
     
@@ -125,44 +210,14 @@ def sanitize_filename(url: str) -> Path:
     elif not has_extension:
         p = p.with_suffix(".md")
     
-    # Incorporate query/fragment into filename if present to ensure uniqueness
     if parsed.query or parsed.fragment:
         hash_input = f"{parsed.query}#{parsed.fragment}"
         digest = hashlib.md5(hash_input.encode()).hexdigest()[:8]
-        
         stem = p.stem
         suffix = p.suffix
         p = p.with_name(f"{stem}_{digest}{suffix}")
         
     return p
-
-def resolve_collision(base_path: Path, relative_path: Path) -> Path:
-    """
-    Resolve file system collisions.
-    Ensure we don't try to create a file where a directory exists or vice-versa.
-    This simple version appends a hash if the exact path already exists as a different type.
-    """
-    full_path = base_path / relative_path
-    
-    # If path exists and is a directory but we want a file -> collision (or vice versa)
-    # But here we are just returning a path.
-    # In `sitemap_to_markdown`, we will usually be creating files.
-    # Conflict: We want to write `foo/bar.md`, but `foo` is a file.
-    # Conflict: We want to write `foo.md`, but `foo.md` is a directory (unlikely).
-    
-    # If we are writing a file, we need to ensure all parent parts are directories.
-    parent = full_path.parent
-    if parent.exists() and not parent.is_dir():
-        # Parent is a file. e.g. `base/foo` is file, we want `base/foo/bar.md`.
-        # This shouldn't happen if `foo` became `foo.md` previously.
-        # But if it did happen, we can't easily fix without renaming the parent.
-        # We will assume our naming scheme `foo.md` vs `foo/` avoids this.
-        pass
-        
-    # Check simple file existence collision if we allow overwriting or not?
-    # Logic elsewhere handles "Update Mode" (Phase 4).
-    # Here just return path.
-    return relative_path
 
 def exponential_backoff(retry_count: int, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
     """Calculate delay with exponential backoff + jitter"""
@@ -170,113 +225,100 @@ def exponential_backoff(retry_count: int, base_delay: float = 1.0, max_delay: fl
     jitter = random.uniform(0, 1)
     return delay + jitter
 
-def rate_limit_sleep(rate_limit: float):
+async def rate_limit_sleep(rate_limit: float):
     """Sleep to enforce rate limit"""
-    delay = 1.0 / rate_limit if rate_limit > 0 else 1.0
-    time.sleep(delay)
+    if rate_limit <= 0:
+        return
+    delay = 1.0 / rate_limit
+    await asyncio.sleep(delay)
 
-def discover_sitemap(base_url: str) -> Optional[str]:
-    """
-    Discover sitemap URL with explicit priority order.
-    
-    Priority:
-    1. If input URL ends with .xml, use it directly
-    2. Try /sitemap.xml
-    3. Try /sitemap_index.xml
-    4. Parse robots.txt for Sitemap: directive
-    
-    Returns:
-        First valid sitemap URL or None if not found
-    """
+async def fetch_with_retry(client: httpx.AsyncClient, url: str, rate_limit: float, max_retries: int = MAX_RETRIES) -> Optional[httpx.Response]:
+    """Fetch URL with exponential backoff and retry logic using httpx"""
+    for retry in range(max_retries):
+        try:
+            # We assume external pacing, but here we handle 429 delays
+            response = await client.get(url, timeout=30.0, follow_redirects=True)
+            
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                        log(f"Rate limit hit, Retry-After: {delay}s")
+                    except ValueError:
+                        delay = exponential_backoff(retry)
+                else:
+                    delay = exponential_backoff(retry)
+                    log(f"Rate limit hit, backing off for {delay:.1f}s")
+                await asyncio.sleep(delay)
+                continue
+            
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as e:
+            if retry < max_retries - 1:
+                delay = exponential_backoff(retry)
+                # log(f"Request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {delay:.1f}s")
+                await asyncio.sleep(delay)
+            else:
+                log(f"Request failed after {max_retries} attempts: {e} URL: {url}")
+                return None
+    return None
+
+async def validate_sitemap(client: httpx.AsyncClient, url: str) -> bool:
+    """Validate that URL points to a valid XML sitemap"""
+    try:
+        response = await client.head(url, timeout=10.0, follow_redirects=True)
+        if response.status_code == 200:
+            content_type = response.headers.get('content-type', '').lower()
+            if 'xml' in content_type or url.endswith('.xml'):
+                return True
+    except httpx.HTTPError:
+        pass
+    return False
+
+async def discover_sitemap(client: httpx.AsyncClient, base_url: str) -> Optional[str]:
+    """Discover sitemap URL with explicit priority order."""
     log(f"Discovering sitemap for {base_url}")
     
     parsed = urlparse(base_url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     
-    # Priority 1: Direct XML URL
+    # Priority 1: Direct XML 
     if base_url.endswith('.xml'):
-        if validate_sitemap(base_url):
+        if await validate_sitemap(client, base_url):
             log(f"Using direct XML URL: {base_url}")
             return base_url
     
-    # Priority 2-3: Common locations
+    # Priority 2: Standard locations
     candidates = [
         f"{base}/sitemap.xml",
         f"{base}/sitemap_index.xml",
     ]
     
     for candidate in candidates:
-        if validate_sitemap(candidate):
+        if await validate_sitemap(client, candidate):
             log(f"Found sitemap at: {candidate}")
             return candidate
-    
-    # Priority 4: robots.txt
+            
+    # Priority 3: robots.txt
     robots_url = f"{base}/robots.txt"
     try:
-        response = requests.get(robots_url, headers={"User-Agent": USER_AGENT}, timeout=10)
+        response = await client.get(robots_url, timeout=10.0, follow_redirects=True)
         for line in response.text.splitlines():
             if line.lower().startswith('sitemap:'):
                 sitemap_url = line.split(':', 1)[1].strip()
-                if validate_sitemap(sitemap_url):
+                if await validate_sitemap(client, sitemap_url):
                     log(f"Found sitemap in robots.txt: {sitemap_url}")
                     return sitemap_url
-    except requests.RequestException:
+    except httpx.HTTPError:
         pass
-    
+        
     log("No sitemap found at any location")
     return None
 
-def validate_sitemap(url: str) -> bool:
-    """Validate that URL points to a valid XML sitemap"""
-    try:
-        response = requests.head(url, headers={"User-Agent": USER_AGENT}, timeout=10, allow_redirects=True)
-        if response.status_code == 200:
-            # Quick check - if content-type suggests XML, likely valid
-            content_type = response.headers.get('content-type', '').lower()
-            if 'xml' in content_type or url.endswith('.xml'):
-                return True
-    except requests.RequestException:
-        pass
-    return False
-
-def fetch_with_retry(url: str, rate_limit: float, max_retries: int = MAX_RETRIES) -> Optional[requests.Response]:
-    """Fetch URL with exponential backoff and retry logic"""
-    for retry in range(max_retries):
-        try:
-            rate_limit_sleep(rate_limit)
-            response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-            
-            if response.status_code == 429:
-                # Handle rate limiting
-                retry_after = response.headers.get('Retry-After')
-                if retry_after:
-                    delay = float(retry_after)
-                    log(f"Rate limit hit, Retry-After: {delay}s")
-                else:
-                    delay = exponential_backoff(retry)
-                    log(f"Rate limit hit, backing off for {delay:.1f}s")
-                time.sleep(delay)
-                continue
-            
-            response.raise_for_status()
-            return response
-        except requests.RequestException as e:
-            if retry < max_retries - 1:
-                delay = exponential_backoff(retry)
-                log(f"Request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {delay:.1f}s")
-                time.sleep(delay)
-            else:
-                log(f"Request failed after {max_retries} attempts: {e}")
-                return None
-    return None
-
 def stream_sitemap_urls(xml_content: str) -> Iterator[Tuple[str, dict]]:
-    """
-    Memory-efficient sitemap parsing using iterparse.
-    
-    Yields:
-        Tuple of (url, metadata) where metadata contains lastmod, changefreq, priority
-    """
+    """Memory-efficient sitemap parsing using iterparse."""
     try:
         from io import StringIO
         context = ET.iterparse(StringIO(xml_content), events=('end',))
@@ -300,7 +342,6 @@ def stream_sitemap_urls(xml_content: str) -> Iterator[Tuple[str, dict]]:
                     yield (current_url, current_meta)
                 current_url = None
                 current_meta = {}
-                # Critical: clear element to free memory
                 elem.clear()
     except ET.ParseError as e:
         log(f"XML parsing error: {e}")
@@ -311,7 +352,6 @@ def extract_sitemap_index(xml_content: str) -> list:
     try:
         from io import StringIO
         context = ET.iterparse(StringIO(xml_content), events=('end',))
-        
         current_loc = None
         for event, elem in context:
             tag = elem.tag.replace(NS, '')
@@ -326,65 +366,49 @@ def extract_sitemap_index(xml_content: str) -> list:
         log(f"XML parsing error in sitemap index: {e}")
     return sitemaps
 
-
-
-def process_url(url: str, output_dir: Path, rate_limit: float) -> str:
-    """
-    Fetch and convert URL to Markdown.
-    Returns status: 'success', 'failed', 'skipped'
-    """
-    # Rate limiting is handled inside fetch_with_retry if needed, 
-    # but we should probably sleep before calling it if we own the cadence?
-    # fetch_with_retry handles retry sleep. Main loop should handle pacing.
-    
-    response = fetch_with_retry(url, rate_limit)
+async def process_url(client: httpx.AsyncClient, url: str, output_dir: Path) -> str:
+    """Fetch and convert URL to Markdown."""
+    response = await fetch_with_retry(client, url, 0) # Rate limit handled by caller
     if not response:
         return "failed"
         
-    # Check Content-Type
     content_type = response.headers.get('Content-Type', '').lower()
     if 'text/html' not in content_type:
-        log(f"Skipping non-HTML content: {url} ({content_type})")
         return "skipped"
         
     try:
         html = response.text
-        # Use simple parsing first
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Remove unwanted elements
         for tag in soup(['script', 'style', 'nav', 'footer', 'iframe', 'noscript']):
             tag.decompose()
             
         # Absolutify URLs
         for tag in soup.find_all(['a', 'img']):
             if tag.has_attr('href'):
-                tag['href'] = requests.compat.urljoin(url, tag['href'])
+                tag['href'] = urljoin(url, tag['href'])
             if tag.has_attr('src'):
-                tag['src'] = requests.compat.urljoin(url, tag['src'])
+                tag['src'] = urljoin(url, tag['src'])
                 
-        # Convert to Markdown
+        # Convert
         converter = html2text.HTML2Text()
         converter.ignore_links = False
         converter.ignore_images = False
         converter.body_width = 0
         converter.ul_item_mark = '-'
         markdown = converter.handle(str(soup))
-        
-        # Clean up excessive newlines
         markdown = re.sub(r'\n{3,}', '\n\n', markdown)
         
-        # Determine output path
         rel_path = sanitize_filename(url)
+        rel_path = resolve_collision(output_dir, rel_path)
         save_path = output_dir / rel_path
         
-        # Create directories
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Write file with metadata
         header = f"---\nurl: {url}\ndate: {datetime.utcnow().isoformat()}\n---\n\n"
-        with open(save_path, 'w', encoding='utf-8') as f:
-            f.write(header + markdown)
+        
+        async with aiofiles.open(save_path, 'w', encoding='utf-8') as f:
+            await f.write(header + markdown)
             
         log(f"Saved: {url} -> {rel_path}")
         return "success"
@@ -393,10 +417,8 @@ def process_url(url: str, output_dir: Path, rate_limit: float) -> str:
         log(f"Conversion error for {url}: {e}")
         return "failed"
 
-
-
 def save_checkpoint(checkpoint_path: str, checkpoint: Checkpoint):
-    """Save checkpoint to JSON file"""
+    """Save checkpoint synchronously (safe since called infrequently or at exit)"""
     try:
         with open(checkpoint_path, 'w', encoding='utf-8') as f:
             json.dump(checkpoint.model_dump(), f, indent=2)
@@ -405,7 +427,6 @@ def save_checkpoint(checkpoint_path: str, checkpoint: Checkpoint):
         log(f"Failed to save checkpoint: {e}")
 
 def load_checkpoint(checkpoint_path: str) -> Optional[Checkpoint]:
-    """Load checkpoint from JSON file"""
     try:
         if os.path.exists(checkpoint_path):
             with open(checkpoint_path, 'r', encoding='utf-8') as f:
@@ -415,138 +436,112 @@ def load_checkpoint(checkpoint_path: str) -> Optional[Checkpoint]:
         log(f"Failed to load checkpoint: {e}")
     return None
 
-# --- Main CLI ---
-
-@app.command()
-def main(
-    url: str = typer.Option(..., help="The base URL or sitemap URL to process"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Optional custom output path"),
-    rate_limit: float = typer.Option(DEFAULT_RATE_LIMIT, help="Requests per second"),
-    batch_size: int = typer.Option(DEFAULT_BATCH_SIZE, help="URLs processed per batch"),
-    update: bool = typer.Option(False, "--update", help="Incremental update mode"),
-    max_pages: int = typer.Option(10000, help="Maximum pages to process"),
-    schema: bool = typer.Option(False, help="Print input JSON schema and exit")
-):
-    """
-    Converts website XML sitemaps to structured Markdown documentation.
-    """
+async def async_main(inputs: InputModel):
+    log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
     
-    # --- Schema Discovery ---
-    if schema:
-        print(InputModel.model_json_schema_json(indent=2))
-        return
-    
-    # --- Validation ---
-    try:
-        inputs = InputModel(url=url, rate_limit=rate_limit, batch_size=batch_size, update=update, max_pages=max_pages)
-    except Exception as e:
-        print(json.dumps(OutputModel(status="error", error=f"Validation Error: {str(e)}").model_dump()))
-        sys.exit(1)
-    
-    # --- Business Logic ---
-    try:
-        log(f"Running sitemap_to_markdown with url: {inputs.url}")
+    # Setup HTTP client with connection pooling
+    limits = httpx.Limits(max_keepalive_connections=100, max_connections=100)
+    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, limits=limits) as client:
         
-        # 1. Discover sitemap
-        sitemap_url = discover_sitemap(inputs.url)
+        # 1. Discover
+        sitemap_url = await discover_sitemap(client, inputs.url)
         if not sitemap_url:
-            print(json.dumps(OutputModel(status="error", error="No sitemap found at any location").model_dump()))
-            sys.exit(1)
-        
-        # 2. Setup output directory
+            print(json.dumps(OutputModel(status="error", error="No sitemap found").model_dump()))
+            return
+
+        # 2. Setup output
         script_dir = os.path.dirname(os.path.abspath(__file__))
         parsed = urlparse(inputs.url)
         domain = sanitize_domain(parsed.netloc)
         output_dir = Path(script_dir) / "output" / domain
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 3. Check for checkpoint
+        # 3. Checkpoint & Bloom Filter
         checkpoint_path = output_dir / "checkpoint.json"
         checkpoint = load_checkpoint(str(checkpoint_path))
         
-        processed_set = set(checkpoint.processed_urls) if checkpoint else set()
-        failed_set = set(checkpoint.failed_urls) if checkpoint else set()
-        skipped_set = set(checkpoint.skipped_urls) if checkpoint else set()
+        if HAS_BLOOM:
+            processed_set = BloomFilter(capacity=100000, error_rate=0.001)
+        else:
+            processed_set = set()
+            
+        failed_set = set()
+        skipped_set = set()
+        total_processed = 0
+        start_time = datetime.utcnow().isoformat()
         
-        start_time = checkpoint.started_at if checkpoint else datetime.utcnow().isoformat()
-        
-        # 4. Check & Fetch sitemap
-        # Optimization: If we have a checkpoint with many processed, maybe we don't need to re-fetch sitemap 
-        # unless we want to find new URLs. For now, always fetch to get full list.
-        
-        response = fetch_with_retry(sitemap_url, inputs.rate_limit)
+        if checkpoint:
+            for u in checkpoint.processed_urls:
+                processed_set.add(u)
+            failed_set = set(checkpoint.failed_urls)
+            skipped_set = set(checkpoint.skipped_urls)
+            total_processed = checkpoint.total_processed
+            start_time = checkpoint.started_at
+            
+        # 4. Fetch sitemap
+        response = await fetch_with_retry(client, sitemap_url, inputs.rate_limit)
         if not response:
-            print(json.dumps(OutputModel(status="error", error=f"Failed to fetch sitemap: {sitemap_url}").model_dump()))
-            sys.exit(1)
-        
+            print(json.dumps(OutputModel(status="error", error=f"Failed to fetch sitemap").model_dump()))
+            return
+            
         xml_content = response.text
         is_sitemap_index = '<sitemapindex' in xml_content.lower()
         
-        # 5. Build queue of URLs
         urls_to_process = []
-        
         if is_sitemap_index:
-            log("Processing sitemap index")
             child_sitemaps = extract_sitemap_index(xml_content)
-            log(f"Found {len(child_sitemaps)} child sitemaps")
-            
             for child_url in child_sitemaps:
-                child_response = fetch_with_retry(child_url, inputs.rate_limit)
-                if child_response:
-                    for url, meta in stream_sitemap_urls(child_response.text):
+                child_res = await fetch_with_retry(client, child_url, inputs.rate_limit)
+                if child_res:
+                    for url, meta in stream_sitemap_urls(child_res.text):
                         urls_to_process.append({'url': url, 'meta': meta})
         else:
-            log("Processing single sitemap")
             for url, meta in stream_sitemap_urls(xml_content):
                 urls_to_process.append({'url': url, 'meta': meta})
                 
-        log(f"Found {len(urls_to_process)} URLs in total")
+        log(f"Found {len(urls_to_process)} URLs")
         
-        # 6. Process Queue
-        total_processed = len(processed_set)
-        urls_processed_in_session = 0
+        # 5. Process in Batches
+        semaphore = asyncio.Semaphore(inputs.concurrency)
         
-        for entry in urls_to_process:
-            if total_processed >= inputs.max_pages:
-                log(f"Reached max pages limit ({inputs.max_pages})")
-                break
-                
+        async def worker(entry):
+            nonlocal total_processed
+            
             url = entry['url']
             meta = entry.get('meta', {})
             
             if url in processed_set:
-                continue
-                
-            # Update check
+                return
+            
+            # Phase 1 Filtering
+            if not should_process_url(url, meta, inputs):
+                log(f"Filtered out: {url}")
+                # We mark as skipped but also processed so we don't retry or anything
+                skipped_set.add(url)
+                processed_set.add(url)
+                return
+
+            # Update Mode Logic
             if inputs.update:
                 rel_path = sanitize_filename(url)
+                rel_path = resolve_collision(output_dir, rel_path)
                 file_path = output_dir / rel_path
-                if file_path.exists():
-                    # Check timestamps if available
-                    lastmod = meta.get('lastmod')
-                    if lastmod:
-                        try:
-                            # parse lastmod (ISO format usually)
-                            # Simple string comparison might work if ISO
-                            # But better to compare against file mtime
-                            # For now, just simplistic check: if exists, skip unless forced?
-                            # Proposal says "compare sitemap lastmod vs local file mtime"
-                            # We implement "If exists, check lastmod". 
-                            pass
-                        except:
-                            pass
-                        
-                    # If we decide to skip:
-                    log(f"Skipping existing (update mode): {url}")
-                    processed_set.add(url)
-                    skipped_set.add(url)
-                    continue
-
-            rate_limit_sleep(inputs.rate_limit)
+                
+                if file_path.exists() and meta.get('lastmod'):
+                    try:
+                        lastmod_dt = date_parser.parse(meta['lastmod']).replace(tzinfo=None)
+                        file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                        if lastmod_dt <= file_mtime:
+                            processed_set.add(url)
+                            skipped_set.add(url)
+                            return
+                    except Exception:
+                        pass
             
-            status = process_url(url, output_dir, inputs.rate_limit)
-            urls_processed_in_session += 1
-            
+            async with semaphore:
+                await rate_limit_sleep(inputs.rate_limit / inputs.concurrency) # Shared rate limit approx
+                status = await process_url(client, url, output_dir)
+                
             if status == "success":
                 processed_set.add(url)
                 total_processed += 1
@@ -555,39 +550,51 @@ def main(
             elif status == "skipped":
                 skipped_set.add(url)
                 processed_set.add(url)
-            
-            # Checkpoint
-            if urls_processed_in_session % CHECKPOINT_INTERVAL == 0:
+                
+        # Batch processing
+        batch_size = inputs.batch_size
+        
+        try:
+            for i in range(0, len(urls_to_process), batch_size):
+                if total_processed >= inputs.max_pages:
+                    break
+                    
+                batch = urls_to_process[i:i+batch_size]
+                await asyncio.gather(*[worker(entry) for entry in batch])
+                
+                # Checkpoint after batch
                 cp = Checkpoint(
                     started_at=start_time,
                     last_updated=datetime.utcnow().isoformat(),
                     source_url=inputs.url,
                     sitemap_type="index" if is_sitemap_index else "single",
-                    processed_urls=list(processed_set),
+                    processed_urls=list(processed_set) if not HAS_BLOOM else [], # Bloom can't dump easily
                     failed_urls=list(failed_set),
                     skipped_urls=list(skipped_set),
                     total_processed=total_processed
                 )
                 save_checkpoint(str(checkpoint_path), cp)
-
-        # 6.5 Retry Failures
+                
+        except asyncio.CancelledError:
+             log("Cancelled - saving checkpoint")
+             # logic in finally block?
+             
+        # Retry Failures
         if failed_set:
-            log(f"Retrying {len(failed_set)} failed URLs...")
+            log(f"Retrying {len(failed_set)} failures")
             retry_list = list(failed_set)
             failed_set.clear()
-            
+            # Simple retry without concurrency for safety? Or same worker
             for url in retry_list:
-                status = process_url(url, output_dir, inputs.rate_limit)
+                # Re-use worker logic roughly... simplified here
+                status = await process_url(client, url, output_dir)
                 if status == "success":
                     processed_set.add(url)
                     total_processed += 1
-                elif status == "skipped":
-                    skipped_set.add(url)
-                    processed_set.add(url)
                 else:
                     failed_set.add(url)
-
-        # 7. Finalize & Manifest
+                    
+        # Finalize
         manifest = {
             "version": "1.0",
             "crawl_date": datetime.utcnow().isoformat(),
@@ -605,35 +612,62 @@ def main(
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)
             
-        index_content = f"# Mirror Index: {domain}\n\n"
-        index_content += f"**Date**: {datetime.utcnow().isoformat()}\n"
-        index_content += f"**Total Processed**: {total_processed}\n"
-        index_content += f"**Failed**: {len(failed_set)}\n"
-        index_content += f"**Skipped**: {len(skipped_set)}\n"
-        
-        index_path_md = output_dir / "_index.md"
-        with open(index_path_md, 'w', encoding='utf-8') as f:
-            f.write(index_content)
-
-        if os.path.exists(checkpoint_path):
-            os.remove(checkpoint_path)
-            
         result = {
             "url": inputs.url,
             "sitemap_url": sitemap_url,
             "total_processed": total_processed,
-            "failed": len(failed_set),
-            "skipped": len(skipped_set),
-            "output_dir": str(output_dir),
-            "manifest": str(manifest_path)
+            "output_dir": str(output_dir)
         }
-        
         print(json.dumps(OutputModel(status="success", data=result).model_dump()))
         
+        if os.path.exists(checkpoint_path):
+            os.remove(checkpoint_path)
+
+@app.command()
+def main(
+    url: str = typer.Option(..., help="The URL"),
+    output: Optional[str] = typer.Option(None, "--output", "-o"),
+    rate_limit: float = typer.Option(DEFAULT_RATE_LIMIT),
+    batch_size: int = typer.Option(DEFAULT_BATCH_SIZE),
+    update: bool = typer.Option(False, "--update"),
+    max_pages: int = typer.Option(10000),
+    concurrency: int = typer.Option(5, "--concurrency"),
+    # Phase 1
+    include_pattern: Optional[str] = typer.Option(None, "--include-pattern", help="Regex to include"),
+    exclude_pattern: Optional[str] = typer.Option(None, "--exclude-pattern", help="Regex to exclude"),
+    include_paths: Optional[str] = typer.Option(None, "--include-paths", help="Comma-separated paths to include"),
+    exclude_paths: Optional[str] = typer.Option(None, "--exclude-paths", help="Comma-separated paths to exclude"),
+    priority_min: Optional[float] = typer.Option(None, "--priority-min", help="Min priority"),
+    changefreq: Optional[str] = typer.Option(None, "--changefreq", help="Specific changefreq"),
+    schema: bool = typer.Option(False)
+):
+    if schema:
+        print(InputModel.model_json_schema_json(indent=2))
+        return
+        
+    try:
+        inputs = InputModel(
+            url=url, 
+            rate_limit=rate_limit, 
+            batch_size=batch_size, 
+            update=update, 
+            max_pages=max_pages,
+            concurrency=concurrency,
+            include_pattern=include_pattern,
+            exclude_pattern=exclude_pattern,
+            include_paths=include_paths,
+            exclude_paths=exclude_paths,
+            priority_min=priority_min,
+            changefreq=changefreq
+        )
+    except Exception as e:
+        print(json.dumps(OutputModel(status="error", error=str(e)).model_dump()))
+        sys.exit(1)
+        
+    try:
+        asyncio.run(async_main(inputs))
     except KeyboardInterrupt:
-        log("Interrupted by user - checkpoint saved")
-        # Save state - reuse checkpoint logic? 
-        # For simplicity, we just exit, but in production code we should save.
+        log("Interrupted by user")
         sys.exit(130)
     except Exception as e:
         print(json.dumps(OutputModel(status="error", error=str(e)).model_dump()))
