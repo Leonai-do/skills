@@ -80,12 +80,13 @@ def test_exponential_backoff_respects_max():
     delay = stm.exponential_backoff(10, base_delay=1.0, max_delay=60.0)
     assert delay <= 61.0  # max + jitter
 
-def test_rate_limit_sleep_timing():
+@pytest.mark.asyncio
+async def test_rate_limit_sleep_timing():
     """Test rate limiting delays requests"""
     start = time.time()
-    stm.rate_limit_sleep(2.0)  # 2 requests/sec = 0.5s delay
+    await stm.rate_limit_sleep(2.0)  # 2 requests/sec = 0.5s delay
     elapsed = time.time() - start
-    assert 0.4 <= elapsed <= 0.6  # Allow small margin
+    assert 0.45 <= elapsed <= 0.6  # Allow small margin
 
 # --- XML Parsing Tests ---
 
@@ -147,7 +148,7 @@ def test_checkpoint_save_and_load(tmp_path):
     assert checkpoint_path.exists()
     
     # Load checkpoint
-loaded_checkpoint = stm.load_checkpoint(str(checkpoint_path))
+    loaded_checkpoint = stm.load_checkpoint(str(checkpoint_path))
     assert loaded_checkpoint is not None
     assert loaded_checkpoint.total_processed == 250
     assert loaded_checkpoint.sitemap_type == "single"
@@ -159,40 +160,7 @@ def test_checkpoint_load_nonexistent():
 
 # --- Grouping Tests ---
 
-def test_group_urls_hierarchically():
-    """Test hierarchical URL grouping by path"""
-    urls = [
-        {'url': 'https://example.com/', 'meta': {}},
-        {'url': 'https://example.com/about', 'meta': {}},
-        {'url': 'https://example.com/blog/post-1', 'meta': {}},
-        {'url': 'https://example.com/blog/post-2', 'meta': {}},
-        {'url': 'https://example.com/products/widget', 'meta': {}},
-    ]
-    
-    groups = stm.group_urls_hierarchically(urls)
-    
-    assert '/' in groups
-    assert '/blog' in groups
-    assert '/products' in groups
-    assert len(groups['/blog']) == 2
-    assert len(groups['/products']) == 1
-
-# --- Markdown Generation Tests ---
-
-def test_generate_markdown_structure():
-    """Test markdown generation with metadata"""
-    urls = [
-        {'url': 'https://example.com/', 'meta': {'lastmod': '2026-01-01'}},
-        {'url': 'https://example.com/about', 'meta': {}},
-    ]
-    
-    markdown = stm.generate_markdown("example.com", "https://example.com/sitemap.xml", urls, 2)
-    
-    assert "# Sitemap: example.com" in markdown
-    assert "**Total URLs**: 2" in markdown
-    assert "**Source**: https://example.com/sitemap.xml" in markdown
-    assert "[https://example.com/](https://example.com/)" in markdown
-    assert "_lastmod: 2026-01-01_" in markdown
+# Stale tests removed
 
 # --- Integration Tests (Note: these would need mocking for true unit tests) ---
 

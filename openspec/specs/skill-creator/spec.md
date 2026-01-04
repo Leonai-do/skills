@@ -1,6 +1,10 @@
 # Skill Creator Spec
 
-## ADDED Requirements
+## Purpose
+
+The Skill Creator specification defines the standard tooling and structure for creating new agent skills in the Agent-Skills repository. It ensures all skills follow a consistent, validated structure that enables reliable discovery and execution by AI agents.
+
+## Requirements
 
 ### Requirement: Skill Creation
 
