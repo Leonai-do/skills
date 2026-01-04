@@ -456,7 +456,7 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 6.1 Page Summarization
 
-- [ ] 6.1.1 **Add dependency**: `openai` or `anthropic` (optional)
+- [x] 6.1.1 **Add dependency**: `openai` or `anthropic` (optional)
 
 - [x] 6.1.2 **Add CLI flags**: `--summarize`, `--ai-api-key <key>`, `--ai-model <name>`
 
@@ -481,7 +481,7 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 6.2 Named Entity Extraction
 
-- [ ] 6.2.1 **Add dependency**: `spacy` (optional)
+- [x] 6.2.1 **Add dependency**: `spacy` (optional)
 
 - [x] 6.2.2 **Add CLI flag**: `--extract-entities`
 
