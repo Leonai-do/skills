@@ -30,6 +30,7 @@ import re
 import random
 import time
 import asyncio
+import subprocess # Added for Phase 6
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 import hashlib
@@ -1359,6 +1360,57 @@ async def async_main(inputs: InputModel):
         if inputs.ai_manifest:
             generate_llms_txt(output_dir, manifest)
             
+        # Phase 6: AI Integration (Delegation)
+        if inputs.summarize or inputs.extract_entities or inputs.semantic_chunk:
+            log("Triggering AI Content Enricher...")
+            try:
+                # Resolve path to ai_content_enricher.py
+                # Assuming standard skills structure: ../ai_content_enricher/ai_content_enricher.py
+                enricher_script = Path(script_dir).parent / "ai_content_enricher" / "ai_content_enricher.py"
+                
+                if not enricher_script.exists():
+                     # Fallback check if running from dev env or different structure?
+                     # Try searching relative to common ancestors? 
+                     # For now, strict check.
+                     log(f"AI Enricher script not found at {enricher_script}")
+                else:
+                    cmd = [
+                        sys.executable,
+                        str(enricher_script),
+                        "--input-dir", str(output_dir),
+                        "--ai-model", inputs.ai_model,
+                        "--concurrency", str(inputs.concurrency)
+                    ]
+                    
+                    if inputs.summarize:
+                        cmd.append("--summarize")
+                    if inputs.extract_entities:
+                        cmd.append("--extract-entities")
+                    if inputs.semantic_chunk:
+                        cmd.append("--semantic-chunk")
+                    if inputs.ai_api_key:
+                        cmd.extend(["--ai-api-key", inputs.ai_api_key])
+                        
+                    log(f"Executing: {' '.join(cmd)}")
+                    
+                    # We stream output to stderr (log) so it doesn't corrupt stdout JSON
+                    process = subprocess.run(cmd, capture_output=True, text=True)
+                    
+                    if process.stdout:
+                        for line in process.stdout.splitlines():
+                            log(f"[AI] {line}")
+                    if process.stderr:
+                         for line in process.stderr.splitlines():
+                            log(f"[AI-ERR] {line}")
+                            
+                    if process.returncode != 0:
+                        log(f"AI Enricher failed with code {process.returncode}")
+                    else:
+                        log("AI Enrichment completed.")
+                        
+            except Exception as e:
+                log(f"Failed to run AI Enricher: {e}")
+
         result = {
             "url": inputs.url,
             "sitemap_url": sitemap_url,
