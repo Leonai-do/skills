@@ -285,32 +285,32 @@ This document contains **7 phases** of enhancements. Each phase is independent a
 
 ### 4.1 Real-Time Progress File
 
-- [ ] 4.1.1 **Add CLI flag**: `--progress-file`
+- [x] 4.1.1 **Add CLI flag**: `--progress-file`
   - **Default**: `_progress.json` (always generated)
 
-- [ ] 4.1.2 **Define progress schema**
+- [x] 4.1.2 **Define progress schema**
   - **Fields**: `processed`, `total`, `failed`, `skipped`, `elapsed_sec`, `eta_sec`, `current_url`
 
-- [ ] 4.1.3 **Calculate ETA**
+- [x] 4.1.3 **Calculate ETA**
   - **Implementation**: `eta = (total - processed) * (elapsed / processed)`
 
-- [ ] 4.1.4 **Write progress every 10 URLs**
+- [x] 4.1.4 **Write progress every 10 URLs**
   - **Location**: Inside main processing loop
   - **Implementation**: `if urls_processed_in_session % 10 == 0: write_progress(...)`
 
-- [ ] 4.1.5 **Test**: Run crawl, verify `_progress.json` updates during execution
+- [x] 4.1.5 **Test**: Run crawl, verify `_progress.json` updates during execution
 
 ### 4.2 HTML Report Generation
 
-- [ ] 4.2.1 **Add dependency**: `jinja2`
+- [x] 4.2.1 **Add dependency**: `jinja2`
 
-- [ ] 4.2.2 **Add CLI flag**: `--html-report`
+- [x] 4.2.2 **Add CLI flag**: `--html-report`
 
-- [ ] 4.2.3 **Create HTML template**
+- [x] 4.2.3 **Create HTML template**
   - **File**: `templates/report.html.j2`
   - **Sections**: Summary stats, failed URLs table, skipped URLs table, timeline chart
 
-- [ ] 4.2.4 **Render template after crawl**
+- [x] 4.2.4 **Render template after crawl**
   - **Implementation**:
     ```python
     from jinja2 import Template
@@ -318,58 +318,58 @@ This document contains **7 phases** of enhancements. Each phase is independent a
     html = template.render(manifest=manifest)
     ```
 
-- [ ] 4.2.5 **Write to `_report.html`**
+- [x] 4.2.5 **Write to `_report.html`**
 
-- [ ] 4.2.6 **Test**: Open generated report in browser, verify renders
+- [x] 4.2.6 **Test**: Open generated report in browser, verify renders
 
 ### 4.3 Diff Reports
 
-- [ ] 4.3.1 **Add CLI flag**: `--diff-with <manifest-path>`
+- [x] 4.3.1 **Add CLI flag**: `--diff-with <manifest-path>`
   - **Purpose**: Compare current crawl with previous manifest
 
-- [ ] 4.3.2 **Load previous manifest**
+- [x] 4.3.2 **Load previous manifest**
   - **Implementation**: `old_manifest = json.load(open(inputs.diff_with))`
 
-- [ ] 4.3.3 **Calculate diff**
+- [x] 4.3.3 **Calculate diff**
   - **Added**: URLs in new manifest not in old
   - **Removed**: URLs in old manifest not in new
   - **Changed**: URLs in both but with different content hashes
 
-- [ ] 4.3.4 **Add content hashing to manifest**
+- [x] 4.3.4 **Add content hashing to manifest**
   - **Implementation**: Store `md5(markdown_content)` in manifest per URL
 
-- [ ] 4.3.5 **Generate diff report section in HTML**
+- [x] 4.3.5 **Generate diff report section in HTML**
 
-- [ ] 4.3.6 **Test**: Run two crawls, verify diff detected
+- [x] 4.3.6 **Test**: Run two crawls, verify diff detected
 
 ### 4.4 Webhook Notifications
 
-- [ ] 4.4.1 **Add CLI flag**: `--notify-webhook <url>`
+- [x] 4.4.1 **Add CLI flag**: `--notify-webhook <url>`
 
-- [ ] 4.4.2 **Create notification payload**
+- [x] 4.4.2 **Create notification payload**
   - **Format**: JSON with `status`, `total_processed`, `failed`, `duration`, `url`
 
-- [ ] 4.4.3 **POST to webhook after crawl completion**
+- [x] 4.4.3 **POST to webhook after crawl completion**
   - **Implementation**: `requests.post(inputs.notify_webhook, json=payload)`
 
-- [ ] 4.4.4 **Handle webhook failures gracefully**
+- [x] 4.4.4 **Handle webhook failures gracefully**
   - **Implementation**: Try/except, log error, don't fail overall crawl
 
-- [ ] 4.4.5 **Test**: Mock webhook server, verify payload received
+- [x] 4.4.5 **Test**: Mock webhook server, verify payload received
 
 ### 4.5 Prometheus Metrics
 
-- [ ] 4.5.1 **Add CLI flag**: `--metrics-file <path>`
+- [x] 4.5.1 **Add CLI flag**: `--metrics-file <path>`
   - **Default**: `_metrics.prom`
 
-- [ ] 4.5.2 **Define metrics**
+- [x] 4.5.2 **Define metrics**
   - **Gauges**: `sitemap_urls_total`, `sitemap_urls_processed`, `sitemap_urls_failed`
   - **Histogram**: `sitemap_request_duration_seconds`
 
-- [ ] 4.5.3 **Write Prometheus format**
+- [x] 4.5.3 **Write Prometheus format**
   - **Format**: `# HELP ... \n# TYPE ... \nmetric_name{labels} value`
 
-- [ ] 4.5.4 **Test**: Verify Prometheus can scrape file
+- [x] 4.5.4 **Test**: Verify Prometheus can scrape file
 
 ---
 

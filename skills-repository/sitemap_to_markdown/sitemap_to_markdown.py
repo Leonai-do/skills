@@ -11,11 +11,13 @@
 #     "python-dateutil",
 #     "pybloom-live",
 #     "readability-lxml",
-#     "pypdf"
+#     "pypdf",
+#     "jinja2"
 # ]
 # ///
 
 from urllib.robotparser import RobotFileParser
+
 
 
 import sys
@@ -26,7 +28,9 @@ import random
 import time
 import asyncio
 import xml.etree.ElementTree as ET
-from datetime import datetime
+import asyncio
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 import hashlib
 from urllib.parse import urlparse, unquote, urljoin
 from typing import Optional, Iterator, Tuple, Dict, Any, Set, List
@@ -41,6 +45,13 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 import mimetypes
 from io import BytesIO
+
+# Phase 4 Imports
+try:
+    from jinja2 import Template
+except ImportError:
+    Template = None
+
 
 # Phase 2 Imports
 try:
@@ -95,7 +106,16 @@ class InputModel(BaseModel):
     proxy: Optional[str] = Field(None, description="Proxy URL (http/https/socks5)")
     headers: Optional[str] = Field(None, description="Custom headers as JSON string")
     respect_robots: bool = Field(False, description="Respect robots.txt rules")
+    respect_robots: bool = Field(False, description="Respect robots.txt rules")
     timeout: int = Field(30, description="Request timeout in seconds")
+
+    # Phase 4: Reporting & Monitoring
+    progress_file: Optional[str] = Field("_progress.json", description="Real-time progress file")
+    html_report: bool = Field(False, description="Generate HTML report")
+    diff_with: Optional[str] = Field(None, description="Manifest path to diff against")
+    notify_webhook: Optional[str] = Field(None, description="Webhook URL for notifications")
+    metrics_file: Optional[str] = Field(None, description="Prometheus metrics file definition")
+
 
 # --- 2. Define Output Schema ---
 class OutputModel(BaseModel):
@@ -642,7 +662,111 @@ def load_checkpoint(checkpoint_path: str) -> Optional[Checkpoint]:
         log(f"Failed to load checkpoint: {e}")
     return None
 
+# --- Phase 4 Reporting Implementation ---
+
+class ProgressStats(BaseModel):
+    processed: int
+    total: int
+    failed: int
+    skipped: int
+    elapsed_sec: float
+    eta_sec: float
+    current_url: str = ""
+
+def write_progress(path: Path, stats: ProgressStats):
+    try:
+        with open(path, 'w') as f:
+            json.dump(stats.model_dump(), f)
+    except Exception:
+        pass
+
+def write_prometheus_metrics(path: Path, stats: ProgressStats):
+     try:
+        content = f"""# HELP sitemap_urls_total Total URLs to process
+# TYPE sitemap_urls_total gauge
+sitemap_urls_total {stats.total}
+# HELP sitemap_urls_processed URLs processed successfully
+# TYPE sitemap_urls_processed gauge
+sitemap_urls_processed {stats.processed}
+# HELP sitemap_urls_failed URLs failed
+# TYPE sitemap_urls_failed gauge
+sitemap_urls_failed {stats.failed}
+# HELP sitemap_elapsed_seconds Elapsed time in seconds
+# TYPE sitemap_elapsed_seconds gauge
+sitemap_elapsed_seconds {stats.elapsed_sec}
+"""
+        with open(path, 'w') as f:
+            f.write(content)
+     except Exception:
+         pass
+
+def generate_html_report(output_dir: Path, manifest: Dict[str, Any]):
+    if not Template:
+        log("Jinja2 not installed, skipping HTML report")
+        return
+        
+    template_str = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sitemap Crawl Report</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .stats { display: flex; gap: 2rem; margin-bottom: 2rem; }
+        .stat { border: 1px solid #ddd; padding: 1rem; border-radius: 4px; flex: 1; text-align: center; }
+        .stat h3 { margin: 0 0 0.5rem; color: #666; font-size: 0.9rem; }
+        .stat .value { font-size: 1.5rem; font-weight: bold; }
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 1rem; }
+        .error { color: #d32f2f; }
+    </style>
+</head>
+<body>
+    <h1>Crawl Report: {{ manifest.source_url }}</h1>
+    <div class="stats">
+        <div class="stat">
+            <h3>Total Processed</h3>
+            <div class="value">{{ manifest.statistics.total_processed }}</div>
+        </div>
+        <div class="stat">
+            <h3>Failed</h3>
+            <div class="value error">{{ manifest.statistics.failed }}</div>
+        </div>
+        <div class="stat">
+            <h3>Skipped</h3>
+            <div class="value">{{ manifest.statistics.skipped }}</div>
+        </div>
+    </div>
+    <p>Crawled on: {{ manifest.crawl_date }}</p>
+    
+    {% if manifest.failed_urls %}
+    <h2>Failed URLs ({{ manifest.failed_urls|length }})</h2>
+    <ul>
+        {% for url in manifest.failed_urls %}
+        <li>{{ url }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</body>
+</html>
+"""
+    try:
+        t = Template(template_str)
+        html = t.render(manifest=manifest)
+        with open(output_dir / "_report.html", "w") as f:
+            f.write(html)
+        log("HTML report generated")
+    except Exception as e:
+        log(f"Failed to generate HTML report: {e}")
+
+async def send_webhook(url: str, payload: Dict[str, Any]):
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.post(url, json=payload, timeout=10)
+        except Exception as e:
+            log(f"Webhook failed: {e}")
+
 async def async_main(inputs: InputModel):
+
     log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
     
     log(f"Running sitemap_to_markdown (Async) with url: {inputs.url}")
@@ -711,9 +835,17 @@ async def async_main(inputs: InputModel):
         failed_set = set()
         skipped_set = set()
         total_processed = 0
-        start_time = datetime.utcnow().isoformat()
+        total_processed = 0
+        
+        # Use simple utcnow replacement to avoid deprecation warning if possible
+        def get_now_str():
+            return datetime.now(timezone.utc).isoformat()
+            
+        start_time_dt = datetime.now(timezone.utc)
+        start_time = start_time_dt.isoformat()
         
         if checkpoint:
+
             for u in checkpoint.processed_urls:
                 processed_set.add(u)
             failed_set = set(checkpoint.failed_urls)
@@ -744,8 +876,11 @@ async def async_main(inputs: InputModel):
                 
         log(f"Found {len(urls_to_process)} URLs")
         
+        log(f"Found {len(urls_to_process)} URLs")
+        
         # 5. Process in Batches
         semaphore = asyncio.Semaphore(inputs.concurrency)
+        total_urls_count = len(urls_to_process)
         
         async def worker(entry):
             nonlocal total_processed
@@ -753,8 +888,16 @@ async def async_main(inputs: InputModel):
             url = entry['url']
             meta = entry.get('meta', {})
             
+            # Progress calculation helpers
+            # Note: total_processed is updated atomically-ish in single thread loop mostly? 
+            # In async code, 'total_processed += 1' is not atomic if await happens.
+            # But here we invoke it.
+            
             if url in processed_set:
                 return
+
+            # ... processing logic ...
+
             
             # Phase 1 Filtering
             if not should_process_url(url, meta, inputs):
@@ -801,11 +944,37 @@ async def async_main(inputs: InputModel):
                 skipped_set.add(url)
                 processed_set.add(url)
                 
+            # Phase 4.1: Progress reporting (approximate, every N items or time based?)
+            # Doing it inside worker might be noisy. Better to do it after batch or periodically.
+            # But let's do it here for "Real-Time".
+            if total_processed % 10 == 0:
+                elapsed = (datetime.now(timezone.utc) - start_time_dt).total_seconds()
+                eta = 0
+                if total_processed > 0:
+                     avg_time = elapsed / total_processed
+                     remaining = total_urls_count - total_processed
+                     eta = remaining * avg_time
+                
+                stats = ProgressStats(
+                    processed=total_processed,
+                    total=total_urls_count,
+                    failed=len(failed_set),
+                    skipped=len(skipped_set),
+                    elapsed_sec=elapsed,
+                    eta_sec=eta,
+                    current_url=url
+                )
+                if inputs.progress_file:
+                     write_progress(output_dir / inputs.progress_file, stats)
+                if inputs.metrics_file:
+                     write_prometheus_metrics(output_dir / inputs.metrics_file, stats)
+
         # Batch processing
         batch_size = inputs.batch_size
         
         try:
             for i in range(0, len(urls_to_process), batch_size):
+
                 if total_processed >= inputs.max_pages:
                     break
                     
@@ -847,7 +1016,7 @@ async def async_main(inputs: InputModel):
         # Finalize
         manifest = {
             "version": "1.0",
-            "crawl_date": datetime.utcnow().isoformat(),
+            "crawl_date": get_now_str(),
             "source_url": inputs.url,
             "statistics": {
                 "total_processed": total_processed,
@@ -861,6 +1030,21 @@ async def async_main(inputs: InputModel):
         manifest_path = output_dir / "_manifest.json"
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)
+
+        # Phase 4.2: HTML Report
+        if inputs.html_report:
+            generate_html_report(output_dir, manifest)
+            
+        # Phase 4.4: Webhook
+        if inputs.notify_webhook:
+             webhook_payload = {
+                 "status": "completed",
+                 "total_processed": total_processed,
+                 "failed": len(failed_set),
+                 "duration": (datetime.now(timezone.utc) - start_time_dt).total_seconds(),
+                 "url": inputs.url
+             }
+             await send_webhook(inputs.notify_webhook, webhook_payload)
             
         result = {
             "url": inputs.url,
@@ -869,6 +1053,7 @@ async def async_main(inputs: InputModel):
             "output_dir": str(output_dir)
         }
         print(json.dumps(OutputModel(status="success", data=result).model_dump()))
+
         
         if os.path.exists(checkpoint_path):
             os.remove(checkpoint_path)
@@ -901,6 +1086,12 @@ def main(
     headers: Optional[str] = typer.Option(None, "--headers", help="Custom headers JSON"),
     respect_robots: bool = typer.Option(False, "--respect-robots", help="Respect robots.txt"),
     timeout: int = typer.Option(30, "--timeout", help="Request timeout"),
+    # Phase 4
+    progress_file: str = typer.Option("_progress.json", "--progress-file", help="Progress file name"),
+    html_report: bool = typer.Option(False, "--html-report", help="Generate HTML report"),
+    diff_with: Optional[str] = typer.Option(None, "--diff-with", help="Path to manifest to diff"),
+    notify_webhook: Optional[str] = typer.Option(None, "--notify-webhook", help="Webhook URL"),
+    metrics_file: Optional[str] = typer.Option(None, "--metrics-file", help="Prometheus metrics file"),
     schema: bool = typer.Option(False)
 ):
     if schema:
@@ -930,7 +1121,12 @@ def main(
             proxy=proxy,
             headers=headers,
             respect_robots=respect_robots,
-            timeout=timeout
+            timeout=timeout,
+            progress_file=progress_file,
+            html_report=html_report,
+            diff_with=diff_with,
+            notify_webhook=notify_webhook,
+            metrics_file=metrics_file
         )
     except Exception as e:
         print(json.dumps(OutputModel(status="error", error=str(e)).model_dump()))
